@@ -71,8 +71,21 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
     }
+    .delete-btn>button {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+        box-shadow: 0 4px 14px 0 rgba(239, 68, 68, 0.39) !important;
+    }
+    .delete-btn>button:hover {
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# Initialize Session State
+if "result_data" not in st.session_state:
+    st.session_state.result_data = None
+if "deleted" not in st.session_state:
+    st.session_state.deleted = False
 
 # Header Section
 st.markdown("""
@@ -83,7 +96,7 @@ st.markdown("""
         <span class="badge">🚀 100% Cloud-Powered</span>
         <span class="badge">💻 Zero Local PC Bandwidth</span>
         <span class="badge">🍿 Direct High-Speed Link</span>
-        <span class="badge">🆓 Free & Instant</span>
+        <span class="badge">🗑️ Manual Cloud Deletion</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -117,7 +130,7 @@ def cleanup_workspace(dirs_to_clean):
                     pass
 
 def upload_to_gofile(file_path: str):
-    """Uploads file to Gofile (Free, No Auth Required, Ultra-fast)."""
+    """Uploads file to Gofile and returns (download_page, file_id, guest_token)."""
     server_res = requests.get("https://api.gofile.io/servers", timeout=15).json()
     if server_res.get("status") != "ok" or not server_res.get("data", {}).get("servers"):
         raise Exception("Gofile servers unavailable.")
@@ -130,9 +143,19 @@ def upload_to_gofile(file_path: str):
         
     if res.get("status") == "ok":
         download_page = res["data"]["downloadPage"]
-        return download_page
+        file_id = res["data"]["id"]
+        guest_token = res["data"].get("guestToken", "")
+        return download_page, file_id, guest_token
     else:
         raise Exception(f"Gofile upload error: {res}")
+
+def delete_from_gofile(file_id: str, guest_token: str):
+    """Permanently deletes the file from Gofile cloud servers."""
+    body = {"contentsId": file_id, "token": guest_token}
+    res = requests.delete("https://api.gofile.io/contents", json=body, timeout=15).json()
+    if res.get("status") == "ok":
+        return True
+    return False
 
 def upload_to_pixeldrain(file_path: str, api_key: str = None):
     """Uploads file to Pixeldrain."""
@@ -141,7 +164,7 @@ def upload_to_pixeldrain(file_path: str, api_key: str = None):
         res = requests.post("https://pixeldrain.com/api/file", files={"file": f}, auth=auth, timeout=600)
         if res.status_code == 201:
             file_id = res.json().get("id")
-            return f"https://pixeldrain.com/api/file/{file_id}"
+            return f"https://pixeldrain.com/api/file/{file_id}", file_id, None
         else:
             raise Exception(res.text)
 
@@ -184,11 +207,9 @@ def process_magnet(magnet: str, px_key: str = None):
         
         last_pct = 5
         for line in proc.stdout:
-            # Parse percentage like (45%) from aria2c output
             match = re.search(r'\((\d+)%\)', line)
             if match:
                 torrent_pct = int(match.group(1))
-                # Scale torrent download 0-100% into overall pipeline 5% - 50%
                 overall_pct = int(5 + (torrent_pct * 0.45))
                 if overall_pct > last_pct:
                     last_pct = overall_pct
@@ -200,11 +221,11 @@ def process_magnet(magnet: str, px_key: str = None):
         proc.wait()
         if proc.returncode != 0:
             st.error("Torrent download terminated with an error.")
-            return None, None
+            return None
             
     except Exception as e:
         st.error(f"Download failed: {str(e)}")
-        return None, None
+        return None
 
     progress_bar.progress(50, text="✅ Step 1/3: Torrent Download Completed! (50%)")
     time.sleep(0.5)
@@ -222,14 +243,13 @@ def process_magnet(magnet: str, px_key: str = None):
 
     if not all_videos:
         st.error("No valid video stream found in the downloaded torrent.")
-        return None, None
+        return None
 
     largest_video = max(all_videos, key=os.path.getsize)
     original_filename = os.path.basename(largest_video)
     
     progress_bar.progress(65, text=f"🎬 Step 2/3: Processing '{original_filename[:30]}...' (65%)")
     
-    # Remux using FFmpeg stream-copy
     if largest_video.endswith(".mp4"):
         shutil.copyfile(largest_video, output_mp4)
     else:
@@ -253,35 +273,46 @@ def process_magnet(magnet: str, px_key: str = None):
     status_text.info(f"☁️ Generating direct stream link for {original_filename} ({file_size_mb} MB)...")
 
     final_url = None
+    file_id = None
+    guest_token = None
     
     if px_key:
         try:
             progress_bar.progress(88, text="☁️ Step 3/3: Uploading to Pixeldrain... (88%)")
-            final_url = upload_to_pixeldrain(output_mp4, px_key)
+            final_url, file_id, guest_token = upload_to_pixeldrain(output_mp4, px_key)
         except Exception as e:
             st.warning(f"Pixeldrain error ({str(e)}), falling back to Gofile...")
     
     if not final_url:
         try:
             progress_bar.progress(90, text="☁️ Step 3/3: Uploading to Gofile CDN... (90%)")
-            final_url = upload_to_gofile(output_mp4)
+            final_url, file_id, guest_token = upload_to_gofile(output_mp4)
         except Exception as e:
             st.error(f"Upload failed: {str(e)}")
-            return None, None
+            return None
 
     progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
     status_text.success("🎉 Conversion & upload finished successfully!")
     
-    # Post-cleanup
+    # Post-cleanup local
     cleanup_workspace([work_dir, output_mp4])
-    return final_url, file_size_mb
+    
+    return {
+        "url": final_url,
+        "file_id": file_id,
+        "guest_token": guest_token,
+        "size_mb": file_size_mb,
+        "filename": original_filename
+    }
 
-# Action Trigger
+# Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
 with col1:
     convert_clicked = st.button("🚀 Convert & Generate Direct Link")
 with col2:
-    if st.button("Clear"):
+    if st.button("Clear / Reset"):
+        st.session_state.result_data = None
+        st.session_state.deleted = False
         st.rerun()
 
 if convert_clicked:
@@ -292,25 +323,53 @@ if convert_clicked:
         st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
     else:
         try:
-            download_url, size_mb = process_magnet(clean_magnet, pixeldrain_key.strip() if pixeldrain_key else None)
-            if download_url:
+            res = process_magnet(clean_magnet, pixeldrain_key.strip() if pixeldrain_key else None)
+            if res:
+                st.session_state.result_data = res
+                st.session_state.deleted = False
                 st.balloons()
-                
-                # Result Card
-                st.markdown("### 🎬 Direct Video Link")
-                st.code(download_url, language="text")
-                
-                st.markdown(f"👉 [**Click Here to Open / Download Video** ({size_mb} MB)]({download_url})")
-                st.info("💡 You can open the link above to stream online or download directly at maximum internet speed.")
-                
         except Exception as e:
             st.error(f"❌ An error occurred during cloud processing: {str(e)}")
 
+# Display Result Card if available
+if st.session_state.result_data:
+    data = st.session_state.result_data
+    
+    st.markdown("---")
+    st.markdown("### 🎬 Cloud Video Link")
+    
+    if not st.session_state.deleted:
+        st.code(data["url"], language="text")
+        
+        col_dl, col_del = st.columns([3, 2])
+        with col_dl:
+            st.markdown(f"👉 [**Open / Download Video** ({data['size_mb']} MB)]({data['url']})")
+            st.caption("💡 Stream online or download directly at Gigabit speed.")
+            
+        with col_del:
+            # Delete button container
+            st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
+            if st.button("🗑️ Delete from Cloud Now"):
+                with st.spinner("Deleting file from cloud servers..."):
+                    if data.get("file_id") and data.get("guest_token"):
+                        success = delete_from_gofile(data["file_id"], data["guest_token"])
+                        if success:
+                            st.session_state.deleted = True
+                            st.success("✅ File has been permanently deleted from cloud servers!")
+                            st.rerun()
+                        else:
+                            st.error("Could not delete file from cloud.")
+                    else:
+                        st.info("File will expire automatically after inactivity.")
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.error("🗑️ This file has been deleted from cloud servers.")
+
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How It Works & FAQ"):
+with st.expander("ℹ️ How It Works & Cloud Privacy"):
     st.markdown("""
-    - **How does it download so fast?** The conversion runs on high-speed cloud servers with Gigabit bandwidth.
-    - **Is anything stored on my computer?** No. The entire process (downloading, remuxing, uploading) happens completely in the cloud.
-    - **Where can I use the link?** You can paste the link into VLC Media Player, stream in browser, or download directly.
+    - **Cloud Cleanup:** Your temporary download chunks are deleted from the conversion runner instantly upon completion.
+    - **Manual Deletion:** You can click the red **'Delete from Cloud Now'** button at any time to permanently remove the uploaded video immediately.
+    - **Automatic Expiration:** If not deleted manually, inactive files expire and delete automatically after 10 days of zero downloads.
     """)
