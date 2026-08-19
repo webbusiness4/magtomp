@@ -4,6 +4,7 @@ import os
 import glob
 import shutil
 import requests
+import re
 import time
 
 # Page Configuration
@@ -117,7 +118,6 @@ def cleanup_workspace(dirs_to_clean):
 
 def upload_to_gofile(file_path: str):
     """Uploads file to Gofile (Free, No Auth Required, Ultra-fast)."""
-    # 1. Get best server
     server_res = requests.get("https://api.gofile.io/servers", timeout=15).json()
     if server_res.get("status") != "ok" or not server_res.get("data", {}).get("servers"):
         raise Exception("Gofile servers unavailable.")
@@ -125,7 +125,6 @@ def upload_to_gofile(file_path: str):
     server_name = server_res["data"]["servers"][0]["name"]
     upload_url = f"https://{server_name}.gofile.io/contents/uploadfile"
     
-    # 2. Upload file
     with open(file_path, "rb") as f:
         res = requests.post(upload_url, files={"file": f}, timeout=600).json()
         
@@ -154,84 +153,128 @@ def process_magnet(magnet: str, px_key: str = None):
     cleanup_workspace([work_dir, output_mp4])
     os.makedirs(work_dir, exist_ok=True)
     
-    with st.status("⚡ Initializing Cloud Pipeline...", expanded=True) as status:
-        # Step 1: Downloading via aria2c
-        status.update(label="📥 Step 1/3: Downloading torrent in cloud...", state="running")
-        st.write("Connecting to peer swarm and downloading media chunks at Gigabit speed...")
+    # Progress Bar Container
+    progress_bar = st.progress(0, text="⚡ Initializing Cloud Pipeline... (0%)")
+    status_text = st.empty()
+    
+    # =========================================================================
+    # Step 1: Downloading via aria2c (0% -> 50%)
+    # =========================================================================
+    progress_bar.progress(5, text="📥 Step 1/3: Connecting to peer swarm & downloading... (5%)")
+    status_text.info("📥 Downloading torrent chunks at Gigabit speed...")
+    
+    cmd_aria = [
+        "aria2c",
+        "--seed-time=0",
+        "--max-connection-per-server=16",
+        "--split=16",
+        "--summary-interval=1",
+        f"--dir={work_dir}",
+        magnet
+    ]
+    
+    try:
+        proc = subprocess.Popen(
+            cmd_aria,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
         
-        cmd_aria = [
-            "aria2c",
-            "--seed-time=0",
-            "--max-connection-per-server=16",
-            "--split=16",
-            "--summary-interval=5",
-            f"--dir={work_dir}",
-            magnet
-        ]
+        last_pct = 5
+        for line in proc.stdout:
+            # Parse percentage like (45%) from aria2c output
+            match = re.search(r'\((\d+)%\)', line)
+            if match:
+                torrent_pct = int(match.group(1))
+                # Scale torrent download 0-100% into overall pipeline 5% - 50%
+                overall_pct = int(5 + (torrent_pct * 0.45))
+                if overall_pct > last_pct:
+                    last_pct = overall_pct
+                    progress_bar.progress(
+                        overall_pct,
+                        text=f"📥 Step 1/3: Downloading Torrent ({torrent_pct}% torrent | {overall_pct}% total)"
+                    )
         
-        try:
-            subprocess.run(cmd_aria, capture_output=True, text=True, check=True)
-        except subprocess.CalledProcessError as e:
-            st.error(f"Download failed: {e.stderr or e.stdout}")
+        proc.wait()
+        if proc.returncode != 0:
+            st.error("Torrent download terminated with an error.")
             return None, None
-
-        # Step 2: Locating and Remuxing Video
-        status.update(label="🎬 Step 2/3: Remuxing to MP4 container...", state="running")
-        st.write("Inspecting media codecs and repackaging into clean MP4...")
-        
-        media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
-        all_videos = []
-        for ext in media_exts:
-            all_videos.extend(glob.glob(f"{work_dir}/**/{ext}", recursive=True))
-
-        if not all_videos:
-            st.error("No valid video stream found in the downloaded torrent.")
-            return None, None
-
-        largest_video = max(all_videos, key=os.path.getsize)
-        original_filename = os.path.basename(largest_video)
-        
-        # Remux using FFmpeg stream-copy
-        if largest_video.endswith(".mp4"):
-            shutil.copyfile(largest_video, output_mp4)
-        else:
-            cmd_ffmpeg = [
-                "ffmpeg", "-y",
-                "-i", largest_video,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                output_mp4
-            ]
-            subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
-        file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
-        st.write(f"✅ Video ready: **{original_filename}** ({file_size_mb} MB)")
+    except Exception as e:
+        st.error(f"Download failed: {str(e)}")
+        return None, None
 
-        # Step 3: Uploading to Cloud Host for Direct Link
-        status.update(label=f"☁️ Step 3/3: Generating direct link ({file_size_mb} MB)...", state="running")
-        st.write("Uploading stream to high-speed cloud CDN...")
+    progress_bar.progress(50, text="✅ Step 1/3: Torrent Download Completed! (50%)")
+    time.sleep(0.5)
 
-        final_url = None
-        
-        # If user provided Pixeldrain key, use Pixeldrain; otherwise use Gofile (100% free & auth-free)
-        if px_key:
-            try:
-                final_url = upload_to_pixeldrain(output_mp4, px_key)
-            except Exception as e:
-                st.warning(f"Pixeldrain error ({str(e)}), falling back to Gofile...")
-        
-        if not final_url:
-            try:
-                final_url = upload_to_gofile(output_mp4)
-            except Exception as e:
-                st.error(f"Upload failed: {str(e)}")
-                return None, None
+    # =========================================================================
+    # Step 2: Locating & Remuxing Video (50% -> 75%)
+    # =========================================================================
+    progress_bar.progress(55, text="🎬 Step 2/3: Inspecting media codecs & remuxing to MP4... (55%)")
+    status_text.info("🎬 Repackaging video container into standard MP4 stream...")
+    
+    media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
+    all_videos = []
+    for ext in media_exts:
+        all_videos.extend(glob.glob(f"{work_dir}/**/{ext}", recursive=True))
 
-        status.update(label="🎉 Conversion & Upload Complete!", state="complete", expanded=False)
+    if not all_videos:
+        st.error("No valid video stream found in the downloaded torrent.")
+        return None, None
+
+    largest_video = max(all_videos, key=os.path.getsize)
+    original_filename = os.path.basename(largest_video)
+    
+    progress_bar.progress(65, text=f"🎬 Step 2/3: Processing '{original_filename[:30]}...' (65%)")
+    
+    # Remux using FFmpeg stream-copy
+    if largest_video.endswith(".mp4"):
+        shutil.copyfile(largest_video, output_mp4)
+    else:
+        cmd_ffmpeg = [
+            "ffmpeg", "-y",
+            "-i", largest_video,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_mp4
+        ]
+        subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Post-cleanup
-        cleanup_workspace([work_dir, output_mp4])
-        return final_url, file_size_mb
+    file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
+    progress_bar.progress(75, text=f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB) (75%)")
+    time.sleep(0.5)
+
+    # =========================================================================
+    # Step 3: Uploading for Direct Link (75% -> 100%)
+    # =========================================================================
+    progress_bar.progress(80, text=f"☁️ Step 3/3: Uploading {file_size_mb} MB to high-speed cloud CDN... (80%)")
+    status_text.info(f"☁️ Generating direct stream link for {original_filename} ({file_size_mb} MB)...")
+
+    final_url = None
+    
+    if px_key:
+        try:
+            progress_bar.progress(88, text="☁️ Step 3/3: Uploading to Pixeldrain... (88%)")
+            final_url = upload_to_pixeldrain(output_mp4, px_key)
+        except Exception as e:
+            st.warning(f"Pixeldrain error ({str(e)}), falling back to Gofile...")
+    
+    if not final_url:
+        try:
+            progress_bar.progress(90, text="☁️ Step 3/3: Uploading to Gofile CDN... (90%)")
+            final_url = upload_to_gofile(output_mp4)
+        except Exception as e:
+            st.error(f"Upload failed: {str(e)}")
+            return None, None
+
+    progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
+    status_text.success("🎉 Conversion & upload finished successfully!")
+    
+    # Post-cleanup
+    cleanup_workspace([work_dir, output_mp4])
+    return final_url, file_size_mb
 
 # Action Trigger
 col1, col2 = st.columns([4, 1])
@@ -252,7 +295,6 @@ if convert_clicked:
             download_url, size_mb = process_magnet(clean_magnet, pixeldrain_key.strip() if pixeldrain_key else None)
             if download_url:
                 st.balloons()
-                st.success("✅ Success! Your direct link is ready.")
                 
                 # Result Card
                 st.markdown("### 🎬 Direct Video Link")
