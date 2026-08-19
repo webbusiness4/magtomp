@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import subprocess
 import os
 import glob
@@ -9,7 +9,7 @@ import time
 # Page Configuration
 st.set_page_config(
     page_title="MagToMP - Magnet to Direct MP4",
-    page_icon="??",
+    page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -17,19 +17,16 @@ st.set_page_config(
 # Custom CSS for Premium UI
 st.markdown("""
 <style>
-    /* Global Styles */
     .stApp {
         background-color: #0b0f19;
         color: #f1f5f9;
     }
-    
-    /* Header & Branding */
     .hero-container {
         text-align: center;
-        padding: 2rem 0 1rem 0;
+        padding: 1.5rem 0 1rem 0;
     }
     .hero-title {
-        font-size: 2.6rem;
+        font-size: 2.5rem;
         font-weight: 800;
         background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
         -webkit-background-clip: text;
@@ -38,39 +35,25 @@ st.markdown("""
     }
     .hero-sub {
         color: #94a3b8;
-        font-size: 1.05rem;
-        margin-bottom: 1.5rem;
+        font-size: 1rem;
+        margin-bottom: 1.2rem;
     }
-    
-    /* Badge styling */
     .badge-container {
         display: flex;
         justify-content: center;
-        gap: 0.75rem;
+        gap: 0.5rem;
         margin-bottom: 1.5rem;
         flex-wrap: wrap;
     }
     .badge {
         background-color: #1e293b;
         color: #38bdf8;
-        padding: 0.35rem 0.85rem;
+        padding: 0.3rem 0.75rem;
         border-radius: 9999px;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
         font-weight: 600;
         border: 1px solid #334155;
     }
-
-    /* Result Card */
-    .result-card {
-        background-color: #131d31;
-        border: 1px solid #1e293b;
-        border-radius: 16px;
-        padding: 1.5rem;
-        margin-top: 1.5rem;
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
-    }
-    
-    /* Primary Button */
     .stButton>button {
         width: 100%;
         border-radius: 12px;
@@ -93,25 +76,32 @@ st.markdown("""
 # Header Section
 st.markdown("""
 <div class="hero-container">
-    <div class="hero-title">? MagToMP Cloud Converter</div>
-    <div class="hero-sub">Transform torrent magnet links into direct, high-speed MP4 streaming & download links in the cloud.</div>
+    <div class="hero-title">⚡ MagToMP Cloud Converter</div>
+    <div class="hero-sub">Convert torrent magnet links to direct MP4 streaming & download links in the cloud.</div>
     <div class="badge-container">
-        <span class="badge">?? 100% Cloud-Powered</span>
-        <span class="badge">?? Zero Local PC Bandwidth</span>
-        <span class="badge">?? Direct In-Browser Playback</span>
-        <span class="badge">?? Free & Instant</span>
+        <span class="badge">🚀 100% Cloud-Powered</span>
+        <span class="badge">💻 Zero Local PC Bandwidth</span>
+        <span class="badge">🍿 Direct High-Speed Link</span>
+        <span class="badge">🆓 Free & Instant</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
+# Optional Settings in Sidebar
+with st.sidebar:
+    st.header("⚙️ Optional Settings")
+    st.caption("No accounts or keys required by default! Default cloud upload is 100% free & anonymous.")
+    pixeldrain_key = st.text_input("Pixeldrain API Key (Optional)", type="password", help="If you have a Pixeldrain account key, enter it here.")
+    st.markdown("---")
+    st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
+
 # Input Section
-with st.container():
-    magnet_input = st.text_area(
-        "Paste Magnet Link",
-        placeholder="magnet:?xt=urn:btih:d0c3a647d6928e469792036c05a18a99479e0809...",
-        height=110,
-        help="Paste a valid torrent magnet link to start the cloud transfer."
-    )
+magnet_input = st.text_area(
+    "Paste Magnet Link",
+    placeholder="magnet:?xt=urn:btih:d0c3a647d6928e469792036c05a18a99479e0809...",
+    height=110,
+    help="Paste a valid torrent magnet link to start the cloud transfer."
+)
 
 def cleanup_workspace(dirs_to_clean):
     """Safely cleans up temporary download files."""
@@ -125,7 +115,38 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def process_magnet(magnet: str):
+def upload_to_gofile(file_path: str):
+    """Uploads file to Gofile (Free, No Auth Required, Ultra-fast)."""
+    # 1. Get best server
+    server_res = requests.get("https://api.gofile.io/servers", timeout=15).json()
+    if server_res.get("status") != "ok" or not server_res.get("data", {}).get("servers"):
+        raise Exception("Gofile servers unavailable.")
+    
+    server_name = server_res["data"]["servers"][0]["name"]
+    upload_url = f"https://{server_name}.gofile.io/contents/uploadfile"
+    
+    # 2. Upload file
+    with open(file_path, "rb") as f:
+        res = requests.post(upload_url, files={"file": f}, timeout=600).json()
+        
+    if res.get("status") == "ok":
+        download_page = res["data"]["downloadPage"]
+        return download_page
+    else:
+        raise Exception(f"Gofile upload error: {res}")
+
+def upload_to_pixeldrain(file_path: str, api_key: str = None):
+    """Uploads file to Pixeldrain."""
+    auth = ("", api_key) if api_key else None
+    with open(file_path, "rb") as f:
+        res = requests.post("https://pixeldrain.com/api/file", files={"file": f}, auth=auth, timeout=600)
+        if res.status_code == 201:
+            file_id = res.json().get("id")
+            return f"https://pixeldrain.com/api/file/{file_id}"
+        else:
+            raise Exception(res.text)
+
+def process_magnet(magnet: str, px_key: str = None):
     work_dir = "./cloud_downloads"
     output_mp4 = "./streamable_video.mp4"
     
@@ -133,10 +154,10 @@ def process_magnet(magnet: str):
     cleanup_workspace([work_dir, output_mp4])
     os.makedirs(work_dir, exist_ok=True)
     
-    with st.status("? Initializing Cloud Pipeline...", expanded=True) as status:
+    with st.status("⚡ Initializing Cloud Pipeline...", expanded=True) as status:
         # Step 1: Downloading via aria2c
-        status.update(label="?? Step 1/3: Downloading torrent in cloud...", state="running")
-        st.write("Connecting to peer swarm and downloading media chunks...")
+        status.update(label="📥 Step 1/3: Downloading torrent in cloud...", state="running")
+        st.write("Connecting to peer swarm and downloading media chunks at Gigabit speed...")
         
         cmd_aria = [
             "aria2c",
@@ -149,14 +170,14 @@ def process_magnet(magnet: str):
         ]
         
         try:
-            res_aria = subprocess.run(cmd_aria, capture_output=True, text=True, check=True)
+            subprocess.run(cmd_aria, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as e:
             st.error(f"Download failed: {e.stderr or e.stdout}")
-            return None, None, None
+            return None, None
 
         # Step 2: Locating and Remuxing Video
-        status.update(label="?? Step 2/3: Remuxing/converting to MP4 container...", state="running")
-        st.write("Inspecting media codecs and building standard MP4 stream...")
+        status.update(label="🎬 Step 2/3: Remuxing to MP4 container...", state="running")
+        st.write("Inspecting media codecs and repackaging into clean MP4...")
         
         media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
         all_videos = []
@@ -165,12 +186,12 @@ def process_magnet(magnet: str):
 
         if not all_videos:
             st.error("No valid video stream found in the downloaded torrent.")
-            return None, None, None
+            return None, None
 
         largest_video = max(all_videos, key=os.path.getsize)
         original_filename = os.path.basename(largest_video)
         
-        # Remux using FFmpeg fast stream-copy
+        # Remux using FFmpeg stream-copy
         if largest_video.endswith(".mp4"):
             shutil.copyfile(largest_video, output_mp4)
         else:
@@ -184,34 +205,38 @@ def process_magnet(magnet: str):
             subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
         file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
-        st.write(f"? Video ready: **{original_filename}** ({file_size_mb} MB)")
+        st.write(f"✅ Video ready: **{original_filename}** ({file_size_mb} MB)")
 
-        # Step 3: Generating Direct MP4 Link
-        status.update(label=f"?? Step 3/3: Generating direct link ({file_size_mb} MB)...", state="running")
-        st.write("Uploading stream to high-speed media CDN for direct playback...")
+        # Step 3: Uploading to Cloud Host for Direct Link
+        status.update(label=f"☁️ Step 3/3: Generating direct link ({file_size_mb} MB)...", state="running")
+        st.write("Uploading stream to high-speed cloud CDN...")
 
-        direct_stream_url = None
-        direct_download_url = None
+        final_url = None
         
-        with open(output_mp4, "rb") as f:
-            upload_res = requests.post("https://pixeldrain.com/api/file", files={"file": f})
-            if upload_res.status_code == 201:
-                file_id = upload_res.json().get("id")
-                direct_stream_url = f"https://pixeldrain.com/api/file/{file_id}"
-                direct_download_url = f"https://pixeldrain.com/api/file/{file_id}?download"
-                status.update(label="?? Conversion & Upload Complete!", state="complete", expanded=False)
-            else:
-                st.error(f"Direct link generation failed: {upload_res.text}")
-                return None, None, None
+        # If user provided Pixeldrain key, use Pixeldrain; otherwise use Gofile (100% free & auth-free)
+        if px_key:
+            try:
+                final_url = upload_to_pixeldrain(output_mp4, px_key)
+            except Exception as e:
+                st.warning(f"Pixeldrain error ({str(e)}), falling back to Gofile...")
+        
+        if not final_url:
+            try:
+                final_url = upload_to_gofile(output_mp4)
+            except Exception as e:
+                st.error(f"Upload failed: {str(e)}")
+                return None, None
 
+        status.update(label="🎉 Conversion & Upload Complete!", state="complete", expanded=False)
+        
         # Post-cleanup
         cleanup_workspace([work_dir, output_mp4])
-        return direct_stream_url, direct_download_url, file_size_mb
+        return final_url, file_size_mb
 
 # Action Trigger
 col1, col2 = st.columns([4, 1])
 with col1:
-    convert_clicked = st.button("?? Convert & Generate Direct MP4 Link")
+    convert_clicked = st.button("🚀 Convert & Generate Direct Link")
 with col2:
     if st.button("Clear"):
         st.rerun()
@@ -219,38 +244,31 @@ with col2:
 if convert_clicked:
     clean_magnet = magnet_input.strip()
     if not clean_magnet:
-        st.warning("?? Please paste a magnet link into the box above.")
+        st.warning("⚠️ Please paste a magnet link into the box above.")
     elif not clean_magnet.startswith("magnet:?"):
-        st.error("?? Invalid format. Magnet links must start with `magnet:?`")
+        st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
     else:
         try:
-            stream_url, download_url, size_mb = process_magnet(clean_magnet)
-            if stream_url:
+            download_url, size_mb = process_magnet(clean_magnet, pixeldrain_key.strip() if pixeldrain_key else None)
+            if download_url:
                 st.balloons()
-                st.success("? Success! Your direct MP4 link is ready.")
+                st.success("✅ Success! Your direct link is ready.")
                 
                 # Result Card
-                st.markdown("### ?? Direct Playable MP4 Link")
-                st.code(stream_url, language="text")
+                st.markdown("### 🎬 Direct Video Link")
+                st.code(download_url, language="text")
                 
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.markdown(f"[?? **Download MP4 File** ({size_mb} MB)]({download_url})")
-                with col_b:
-                    st.caption("?? Works in VLC, Browser, and any external media player.")
-                
-                # In-Browser Video Player
-                st.markdown("### ?? Instant Cloud Stream")
-                st.video(stream_url)
+                st.markdown(f"👉 [**Click Here to Open / Download Video** ({size_mb} MB)]({download_url})")
+                st.info("💡 You can open the link above to stream online or download directly at maximum internet speed.")
                 
         except Exception as e:
-            st.error(f"? An error occurred during cloud processing: {str(e)}")
+            st.error(f"❌ An error occurred during cloud processing: {str(e)}")
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("?? How It Works & FAQ"):
+with st.expander("ℹ️ How It Works & FAQ"):
     st.markdown("""
     - **How does it download so fast?** The conversion runs on high-speed cloud servers with Gigabit bandwidth.
     - **Is anything stored on my computer?** No. The entire process (downloading, remuxing, uploading) happens completely in the cloud.
-    - **Where can I use the link?** You can paste the direct link into VLC Media Player (`Media -> Open Network Stream`), use it in web players, or download the raw `.mp4` file directly.
+    - **Where can I use the link?** You can paste the link into VLC Media Player, stream in browser, or download directly.
     """)
