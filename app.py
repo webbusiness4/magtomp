@@ -9,7 +9,7 @@ import time
 
 # Page Configuration
 st.set_page_config(
-    page_title="MagToMP - Magnet to Direct MP4",
+    page_title="MagToMP - Magnet to Streamtape Direct",
     page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -55,6 +55,15 @@ st.markdown("""
         font-weight: 600;
         border: 1px solid #334155;
     }
+    .badge-st {
+        background-color: #312e81;
+        color: #a5b4fc;
+        padding: 0.3rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border: 1px solid #4338ca;
+    }
     .stButton>button {
         width: 100%;
         border-radius: 12px;
@@ -71,12 +80,12 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
     }
-    .delete-btn>button {
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
-        box-shadow: 0 4px 14px 0 rgba(239, 68, 68, 0.39) !important;
-    }
-    .delete-btn>button:hover {
-        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6) !important;
+    .streamtape-card {
+        background-color: #131d31;
+        border: 1px solid #312e81;
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin-top: 1.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -84,31 +93,50 @@ st.markdown("""
 # Initialize Session State
 if "result_data" not in st.session_state:
     st.session_state.result_data = None
-if "deleted" not in st.session_state:
-    st.session_state.deleted = False
+
+# Retrieve Default Secrets or Environment Variables
+default_login = ""
+default_key = ""
+
+try:
+    if "STREAMTAPE_LOGIN" in st.secrets:
+        default_login = st.secrets["STREAMTAPE_LOGIN"]
+    if "STREAMTAPE_KEY" in st.secrets:
+        default_key = st.secrets["STREAMTAPE_KEY"]
+except Exception:
+    pass
+
+if not default_login:
+    default_login = os.environ.get("STREAMTAPE_LOGIN", "")
+if not default_key:
+    default_key = os.environ.get("STREAMTAPE_KEY", "")
 
 # Header Section
 st.markdown("""
 <div class="hero-container">
-    <div class="hero-title">⚡ MagToMP Cloud Converter</div>
-    <div class="hero-sub">Convert torrent magnet links to pure MP4 streams & Streamtape-compatible links.</div>
+    <div class="hero-title">⚡ MagToMP ➔ Streamtape Cloud</div>
+    <div class="hero-sub">Convert magnet links to MP4 and upload directly into your Streamtape account in the cloud.</div>
     <div class="badge-container">
-        <span class="badge">🚀 100% Cloud-Powered</span>
+        <span class="badge-st">🚀 Direct Streamtape Upload</span>
         <span class="badge">💻 Zero Local PC Bandwidth</span>
-        <span class="badge">📡 Streamtape Verified</span>
-        <span class="badge">🆓 Free & Instant</span>
+        <span class="badge">🎬 Fast MP4 Remuxing</span>
+        <span class="badge">🆓 100% Free</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Streamtape & Cloud Settings in Sidebar
+# Sidebar Settings
 with st.sidebar:
-    st.header("⚡ Streamtape Auto-Upload")
-    st.caption("Enter your Streamtape API credentials to upload directly to your Streamtape account automatically!")
-    st_login = st.text_input("Streamtape API Login", type="default", placeholder="e.g. 78241fa9...")
-    st_key = st.text_input("Streamtape API Key", type="password", placeholder="e.g. dZkJ827...")
-    st.markdown("---")
-    pixeldrain_key = st.text_input("Pixeldrain API Key (Optional)", type="password")
+    st.header("⚡ Streamtape Account")
+    st.caption("Your credentials are used to push videos directly to your Streamtape dashboard.")
+    st_login = st.text_input("Streamtape API Login", value=default_login, type="default", placeholder="e.g. 1508538fc...")
+    st_key = st.text_input("Streamtape API Key", value=default_key, type="password", placeholder="e.g. 9OpkRzZ...")
+    
+    if st_login and st_key:
+        st.success("✅ Streamtape Account Connected!")
+    else:
+        st.info("💡 Enter your login & key above, or add them in Streamlit Secrets.")
+        
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
 
@@ -117,7 +145,7 @@ magnet_input = st.text_area(
     "Paste Magnet Link",
     placeholder="magnet:?xt=urn:btih:d0c3a647d6928e469792036c05a18a99479e0809...",
     height=110,
-    help="Paste a valid torrent magnet link to start the cloud transfer."
+    help="Paste a valid torrent magnet link to start the cloud transfer directly to Streamtape."
 )
 
 def cleanup_workspace(dirs_to_clean):
@@ -132,75 +160,38 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def upload_to_litterbox(file_path: str):
-    """Uploads to Catbox/Litterbox: Returns 100% pure video/mp4 MIME stream (Accepted by Streamtape Remote DL)."""
-    with open(file_path, "rb") as f:
-        res = requests.post(
-            "https://litterbox.catbox.moe/resources/internals/api.php",
-            data={"reqtype": "fileupload", "time": "72h"},
-            files={"fileToUpload": f},
-            timeout=600
-        )
-    if res.status_code == 200 and res.text.startswith("http"):
-        return res.text.strip()
-    return None
-
-def upload_to_gofile(file_path: str):
-    """Uploads file to Gofile and returns (download_page, file_id, guest_token)."""
-    server_res = requests.get("https://api.gofile.io/servers", timeout=15).json()
-    if server_res.get("status") != "ok" or not server_res.get("data", {}).get("servers"):
-        raise Exception("Gofile servers unavailable.")
-    
-    server_name = server_res["data"]["servers"][0]["name"]
-    upload_url = f"https://{server_name}.gofile.io/contents/uploadfile"
-    
-    with open(file_path, "rb") as f:
-        res = requests.post(upload_url, files={"file": f}, timeout=600).json()
-        
-    if res.get("status") == "ok":
-        download_page = res["data"]["downloadPage"]
-        file_id = res["data"]["id"]
-        guest_token = res["data"].get("guestToken", "")
-        return download_page, file_id, guest_token
-    else:
-        raise Exception(f"Gofile upload error: {res}")
-
-def delete_from_gofile(file_id: str, guest_token: str):
-    """Permanently deletes the file from Gofile cloud servers."""
-    body = {"contentsId": file_id, "token": guest_token}
-    res = requests.delete("https://api.gofile.io/contents", json=body, timeout=15).json()
-    return res.get("status") == "ok"
-
-def upload_to_streamtape_direct(file_path: str, login: str, key: str):
-    """Uploads directly to user's Streamtape account via Official Upload API."""
+def upload_to_streamtape(file_path: str, login: str, key: str):
+    """Directly uploads file to Streamtape via official REST API."""
     url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
     res = requests.get(url_req, timeout=15).json()
     if res.get("status") != 200:
-        raise Exception(f"Streamtape auth error: {res.get('msg')}")
+        raise Exception(f"Streamtape API Error: {res.get('msg')}")
     
     upload_url = res["result"]["url"]
     with open(file_path, "rb") as f:
-        upload_res = requests.post(upload_url, files={"file": f}, timeout=1200).json()
+        upload_res = requests.post(upload_url, files={"file": f}, timeout=1800).json()
     
     if upload_res.get("status") == 200:
-        return upload_res["result"]["url"]
-    return None
+        video_url = upload_res["result"]["url"]
+        return video_url
+    else:
+        raise Exception(f"Upload failed: {upload_res.get('msg')}")
 
-def process_magnet(magnet: str, px_key: str = None, st_login: str = None, st_key: str = None):
+def process_magnet_to_streamtape(magnet: str, login: str, key: str):
     work_dir = "./cloud_downloads"
     output_mp4 = "./streamable_video.mp4"
     
     cleanup_workspace([work_dir, output_mp4])
     os.makedirs(work_dir, exist_ok=True)
     
-    progress_bar = st.progress(0, text="⚡ Initializing Cloud Pipeline... (0%)")
+    progress_bar = st.progress(0, text="⚡ Initializing Cloud Engine... (0%)")
     status_text = st.empty()
     
     # =========================================================================
     # Step 1: Downloading via aria2c (0% -> 50%)
     # =========================================================================
-    progress_bar.progress(5, text="📥 Step 1/3: Connecting to peer swarm & downloading... (5%)")
-    status_text.info("📥 Downloading torrent chunks at Gigabit speed...")
+    progress_bar.progress(5, text="📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)")
+    status_text.info("📥 Connecting to peer swarm...")
     
     cmd_aria = [
         "aria2c",
@@ -247,10 +238,10 @@ def process_magnet(magnet: str, px_key: str = None, st_login: str = None, st_key
     time.sleep(0.5)
 
     # =========================================================================
-    # Step 2: Locating & Remuxing Video (50% -> 75%)
+    # Step 2: Locating & Remuxing Video (50% -> 70%)
     # =========================================================================
-    progress_bar.progress(55, text="🎬 Step 2/3: Inspecting media codecs & remuxing to MP4... (55%)")
-    status_text.info("🎬 Repackaging video container into standard MP4 stream...")
+    progress_bar.progress(55, text="🎬 Step 2/3: Repackaging video to standard MP4 stream... (55%)")
+    status_text.info("🎬 Remuxing video container...")
     
     media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
     all_videos = []
@@ -264,7 +255,7 @@ def process_magnet(magnet: str, px_key: str = None, st_login: str = None, st_key
     largest_video = max(all_videos, key=os.path.getsize)
     original_filename = os.path.basename(largest_video)
     
-    progress_bar.progress(65, text=f"🎬 Step 2/3: Processing '{original_filename[:30]}...' (65%)")
+    progress_bar.progress(62, text=f"🎬 Step 2/3: Remuxing '{original_filename[:30]}...' (62%)")
     
     if largest_video.endswith(".mp4"):
         shutil.copyfile(largest_video, output_mp4)
@@ -279,53 +270,30 @@ def process_magnet(magnet: str, px_key: str = None, st_login: str = None, st_key
         subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
-    progress_bar.progress(75, text=f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB) (75%)")
+    progress_bar.progress(70, text=f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB) (70%)")
     time.sleep(0.5)
 
     # =========================================================================
-    # Step 3: Generating Streamtape & Pure MP4 Links (75% -> 100%)
+    # Step 3: Direct Upload to Streamtape (70% -> 100%)
     # =========================================================================
-    progress_bar.progress(80, text=f"☁️ Step 3/3: Generating pure MP4 stream links ({file_size_mb} MB)... (80%)")
-    status_text.info(f"☁️ Uploading {original_filename} ({file_size_mb} MB)...")
+    progress_bar.progress(75, text=f"🚀 Step 3/3: Uploading {file_size_mb} MB directly to Streamtape... (75%)")
+    status_text.info(f"🚀 Pushing {original_filename} directly to Streamtape API...")
 
-    # 1. Pure video/mp4 MIME link (Catbox/Litterbox)
-    pure_mp4_url = None
-    try:
-        progress_bar.progress(85, text="📡 Generating Streamtape-verified pure video/mp4 stream URL... (85%)")
-        pure_mp4_url = upload_to_litterbox(output_mp4)
-    except Exception:
-        pass
-
-    # 2. Streamtape Direct Account Upload (if login/key provided)
     streamtape_url = None
-    if st_login and st_key:
-        try:
-            progress_bar.progress(92, text="🚀 Uploading directly to your Streamtape account... (92%)")
-            streamtape_url = upload_to_streamtape_direct(output_mp4, st_login, st_key)
-        except Exception as e:
-            st.warning(f"Streamtape Direct Upload failed: {str(e)}")
-
-    # 3. Gofile Backup Page
-    gofile_url = None
-    file_id = None
-    guest_token = None
     try:
-        progress_bar.progress(96, text="☁️ Uploading to Gofile... (96%)")
-        gofile_url, file_id, guest_token = upload_to_gofile(output_mp4)
+        progress_bar.progress(85, text="🚀 Step 3/3: Transferring video stream to Streamtape... (85%)")
+        streamtape_url = upload_to_streamtape(output_mp4, login, key)
     except Exception as e:
-        pass
+        st.error(f"Streamtape Upload failed: {str(e)}")
+        return None
 
     progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
-    status_text.success("🎉 All stream links generated successfully!")
+    status_text.success(f"🎉 Successfully uploaded to your Streamtape account!")
     
     cleanup_workspace([work_dir, output_mp4])
     
     return {
-        "pure_mp4_url": pure_mp4_url,
         "streamtape_url": streamtape_url,
-        "gofile_url": gofile_url,
-        "file_id": file_id,
-        "guest_token": guest_token,
         "size_mb": file_size_mb,
         "filename": original_filename
     }
@@ -333,80 +301,50 @@ def process_magnet(magnet: str, px_key: str = None, st_login: str = None, st_key
 # Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
 with col1:
-    convert_clicked = st.button("🚀 Convert & Generate Direct Links")
+    convert_clicked = st.button("🚀 Convert & Push Directly to Streamtape")
 with col2:
     if st.button("Clear / Reset"):
         st.session_state.result_data = None
-        st.session_state.deleted = False
         st.rerun()
 
 if convert_clicked:
     clean_magnet = magnet_input.strip()
+    clean_login = st_login.strip()
+    clean_key = st_key.strip()
+    
     if not clean_magnet:
         st.warning("⚠️ Please paste a magnet link into the box above.")
     elif not clean_magnet.startswith("magnet:?"):
         st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
+    elif not clean_login or not clean_key:
+        st.error("⚠️ Please enter your Streamtape API Login and Key in the sidebar.")
     else:
         try:
-            res = process_magnet(
-                clean_magnet,
-                px_key=pixeldrain_key.strip() if pixeldrain_key else None,
-                st_login=st_login.strip() if st_login else None,
-                st_key=st_key.strip() if st_key else None
-            )
+            res = process_magnet_to_streamtape(clean_magnet, clean_login, clean_key)
             if res:
                 st.session_state.result_data = res
-                st.session_state.deleted = False
                 st.balloons()
         except Exception as e:
-            st.error(f"❌ An error occurred during cloud processing: {str(e)}")
+            st.error(f"❌ Error during processing: {str(e)}")
 
 # Display Results Card
 if st.session_state.result_data:
     data = st.session_state.result_data
     
     st.markdown("---")
-    st.markdown(f"### 🎬 Converted Video: **{data['filename']}** ({data['size_mb']} MB)")
+    st.markdown(f"### 🎉 Streamtape Video Ready!")
+    st.markdown(f"**File:** `{data['filename']}` | **Size:** `{data['size_mb']} MB`")
     
-    if not st.session_state.deleted:
-        # Streamtape Direct Account Link
-        if data.get("streamtape_url"):
-            st.success(f"🎉 **Uploaded Directly to Streamtape!**")
-            st.code(data["streamtape_url"], language="text")
-            st.markdown(f"👉 [**Open on Streamtape**]({data['streamtape_url']})")
-            st.markdown("---")
-            
-        # Streamtape Remote Upload URL
-        if data.get("pure_mp4_url"):
-            st.markdown("#### 📡 Pure MP4 Stream URL *(Verified for Streamtape Remote DL & VLC)*")
-            st.code(data["pure_mp4_url"], language="text")
-            st.caption("✅ **Use this link for your TypeScript remote upload script!** Returns pure `Content-Type: video/mp4`.")
-            st.markdown(f"👉 [**▶️ Stream / Download Pure MP4**]({data['pure_mp4_url']})")
-        
-        # Gofile Link
-        if data.get("gofile_url"):
-            st.markdown("#### 🌐 Gofile Cloud Download Page:")
-            st.code(data["gofile_url"], language="text")
-            
-        st.markdown("---")
-        col_del = st.columns([1])[0]
-        with col_del:
-            st.markdown('<div class="delete-btn">', unsafe_allow_html=True)
-            if st.button("🗑️ Delete from Cloud Now"):
-                with st.spinner("Deleting file from cloud servers..."):
-                    if data.get("file_id") and data.get("guest_token"):
-                        delete_from_gofile(data["file_id"], data["guest_token"])
-                    st.session_state.deleted = True
-                    st.success("✅ File deleted from cloud!")
-                    st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        st.error("🗑️ This file has been deleted from cloud servers.")
+    st.markdown("#### 🔗 Your Streamtape Video Link:")
+    st.code(data["streamtape_url"], language="text")
+    
+    st.markdown(f"👉 [**▶️ Open Video on Streamtape**]({data['streamtape_url']})")
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How To Connect With Streamtape"):
+with st.expander("ℹ️ How It Works & Streamtape Integration"):
     st.markdown("""
-    - **Method 1 (Fastest & 100% Reliable):** Enter your **Streamtape API Login & Key** in the left sidebar. MagToMP will upload the video directly to your Streamtape account over the official API without needing remote download queues!
-    - **Method 2 (Remote Script):** Copy the **Pure MP4 Stream URL** (ends in `.mp4` with direct MIME headers) and pass it to `mirror_video.ts --url "<URL>"`.
+    - **100% Direct & Cloud-Powered:** The cloud server downloads the torrent, converts it to MP4 with FFmpeg, and streams it directly to your Streamtape account over the official API.
+    - **No Middlemen:** No 3rd-party temporary file hosts, no expiration links, and no remote download queue errors.
+    - **Streamtape Secrets:** You can save your Login and Key permanently in your Streamlit Cloud **App Settings ➔ Secrets** so you never have to type them again!
     """)
