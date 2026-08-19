@@ -6,6 +6,7 @@ import shutil
 import requests
 import re
 import time
+from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 # Page Configuration
 st.set_page_config(
@@ -80,13 +81,6 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
     }
-    .streamtape-card {
-        background-color: #131d31;
-        border: 1px solid #312e81;
-        border-radius: 16px;
-        padding: 1.5rem;
-        margin-top: 1.5rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,17 +101,17 @@ except Exception:
     pass
 
 if not default_login:
-    default_login = os.environ.get("STREAMTAPE_LOGIN", "")
+    default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 if not default_key:
-    default_key = os.environ.get("STREAMTAPE_KEY", "")
+    default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
 
 # Header Section
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP ➔ Streamtape Cloud</div>
-    <div class="hero-sub">Convert magnet links to MP4 and upload directly into your Streamtape account in the cloud.</div>
+    <div class="hero-sub">Convert magnet links to MP4 and upload directly into your Streamtape account with live MB/progress tracking.</div>
     <div class="badge-container">
-        <span class="badge-st">🚀 Direct Streamtape Upload</span>
+        <span class="badge-st">🚀 Live Upload MB Tracker</span>
         <span class="badge">💻 Zero Local PC Bandwidth</span>
         <span class="badge">🎬 Fast MP4 Remuxing</span>
         <span class="badge">🆓 100% Free</span>
@@ -160,20 +154,43 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def upload_to_streamtape(file_path: str, login: str, key: str):
-    """Directly uploads file to Streamtape via official REST API."""
+def upload_to_streamtape_with_progress(file_path: str, login: str, key: str, progress_bar, status_text):
+    """Uploads file to Streamtape with real-time Uploaded MB, Total MB, and Remaining MB tracking."""
     url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
     res = requests.get(url_req, timeout=15).json()
     if res.get("status") != 200:
         raise Exception(f"Streamtape API Error: {res.get('msg')}")
     
     upload_url = res["result"]["url"]
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+    filename = os.path.basename(file_path)
+
+    def on_progress(monitor):
+        up_bytes = monitor.bytes_read
+        up_mb = round(up_bytes / (1024 * 1024), 2)
+        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+        
+        # Scale upload progress into 70% -> 100% of overall pipeline
+        overall_pct = int(70 + (upload_pct * 0.30))
+        
+        progress_bar.progress(
+            overall_pct,
+            text=f"🚀 Step 3/3: Uploading to Streamtape ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
+        )
+        status_text.info(
+            f"🚀 **Streamtape Upload:** `{up_mb} MB` / `{file_size_mb} MB` ({upload_pct}%) | ⏳ **Remaining:** `{rem_mb} MB`"
+        )
+
     with open(file_path, "rb") as f:
-        upload_res = requests.post(upload_url, files={"file": f}, timeout=1800).json()
-    
+        encoder = MultipartEncoder(fields={"file": (filename, f, "video/mp4")})
+        monitor = MultipartEncoderMonitor(encoder, on_progress)
+        headers = {"Content-Type": monitor.content_type}
+        upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
     if upload_res.get("status") == 200:
-        video_url = upload_res["result"]["url"]
-        return video_url
+        return upload_res["result"]["url"]
     else:
         raise Exception(f"Upload failed: {upload_res.get('msg')}")
 
@@ -274,21 +291,25 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
     time.sleep(0.5)
 
     # =========================================================================
-    # Step 3: Direct Upload to Streamtape (70% -> 100%)
+    # Step 3: Direct Upload to Streamtape with Live MB & Remaining MB Tracking
     # =========================================================================
-    progress_bar.progress(75, text=f"🚀 Step 3/3: Uploading {file_size_mb} MB directly to Streamtape... (75%)")
-    status_text.info(f"🚀 Pushing {original_filename} directly to Streamtape API...")
+    progress_bar.progress(70, text=f"🚀 Step 3/3: Initializing Streamtape upload ({file_size_mb} MB)... (70%)")
 
     streamtape_url = None
     try:
-        progress_bar.progress(85, text="🚀 Step 3/3: Transferring video stream to Streamtape... (85%)")
-        streamtape_url = upload_to_streamtape(output_mp4, login, key)
+        streamtape_url = upload_to_streamtape_with_progress(
+            output_mp4,
+            login,
+            key,
+            progress_bar,
+            status_text
+        )
     except Exception as e:
         st.error(f"Streamtape Upload failed: {str(e)}")
         return None
 
     progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
-    status_text.success(f"🎉 Successfully uploaded to your Streamtape account!")
+    status_text.success(f"🎉 Successfully uploaded {file_size_mb} MB to your Streamtape account!")
     
     cleanup_workspace([work_dir, output_mp4])
     
@@ -344,7 +365,7 @@ if st.session_state.result_data:
 st.markdown("---")
 with st.expander("ℹ️ How It Works & Streamtape Integration"):
     st.markdown("""
+    - **Live MB Upload Progress:** Tracks exactly how many MBs have been uploaded, total MBs, percentage, and MBs remaining in real-time.
     - **100% Direct & Cloud-Powered:** The cloud server downloads the torrent, converts it to MP4 with FFmpeg, and streams it directly to your Streamtape account over the official API.
     - **No Middlemen:** No 3rd-party temporary file hosts, no expiration links, and no remote download queue errors.
-    - **Streamtape Secrets:** You can save your Login and Key permanently in your Streamlit Cloud **App Settings ➔ Secrets** so you never have to type them again!
     """)
