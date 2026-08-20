@@ -6,11 +6,13 @@ import shutil
 import requests
 import re
 import time
+import threading
+import hashlib
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 # Page Configuration
 st.set_page_config(
-    page_title="MagToMP - Magnet to Streamtape Direct",
+    page_title="MagToMP - Magnet to Streamtape Cloud",
     page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -65,6 +67,15 @@ st.markdown("""
         font-weight: 600;
         border: 1px solid #4338ca;
     }
+    .badge-bg {
+        background-color: #064e3b;
+        color: #6ee7b7;
+        padding: 0.3rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border: 1px solid #059669;
+    }
     .stButton>button {
         width: 100%;
         border-radius: 12px;
@@ -84,9 +95,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize Session State
-if "result_data" not in st.session_state:
-    st.session_state.result_data = None
+# Global Server-Side Job Manager (Persists even when phone browser tab is closed/minimized)
+if "GLOBAL_JOBS" not in st.session_state:
+    st.session_state.GLOBAL_JOBS = {}
+
+@st.cache_resource
+def get_global_job_storage():
+    """Server-level persistent storage across all WebSocket reconnects."""
+    return {}
+
+GLOBAL_STORAGE = get_global_job_storage()
 
 # Retrieve Default Secrets or Environment Variables
 default_login = ""
@@ -109,12 +127,12 @@ if not default_key:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP ➔ Streamtape Cloud</div>
-    <div class="hero-sub">Convert magnet links to MP4 and upload directly to Streamtape while preserving original filenames.</div>
+    <div class="hero-sub">Cloud torrent converter that runs in the background even if you minimize or lock your phone.</div>
     <div class="badge-container">
-        <span class="badge-st">🚀 Original Filename Preserved</span>
-        <span class="badge">💻 Live MB Progress</span>
-        <span class="badge">🎬 Fast MP4 Remuxing</span>
-        <span class="badge">🆓 100% Free</span>
+        <span class="badge-bg">📱 Background Phone Safe</span>
+        <span class="badge-st">🚀 Direct Streamtape Upload</span>
+        <span class="badge">🏷️ Original Name Preserved</span>
+        <span class="badge">💻 Zero Local Bandwidth</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -154,63 +172,21 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def upload_to_streamtape_with_progress(file_path: str, custom_filename: str, login: str, key: str, progress_bar, status_text):
-    """Uploads file to Streamtape with original filename preservation and real-time MB tracking."""
-    url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
-    res = requests.get(url_req, timeout=15).json()
-    if res.get("status") != 200:
-        raise Exception(f"Streamtape API Error: {res.get('msg')}")
-    
-    upload_url = res["result"]["url"]
-    file_size = os.path.getsize(file_path)
-    file_size_mb = round(file_size / (1024 * 1024), 2)
-
-    def on_progress(monitor):
-        up_bytes = monitor.bytes_read
-        up_mb = round(up_bytes / (1024 * 1024), 2)
-        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
-        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
-        
-        # Scale upload progress into 70% -> 100% of overall pipeline
-        overall_pct = int(70 + (upload_pct * 0.30))
-        
-        progress_bar.progress(
-            overall_pct,
-            text=f"🚀 Step 3/3: Uploading '{custom_filename}' ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
-        )
-        status_text.info(
-            f"🚀 **Streamtape Upload:** `{up_mb} MB` / `{file_size_mb} MB` ({upload_pct}%) | ⏳ **Remaining:** `{rem_mb} MB`"
-        )
-
-    with open(file_path, "rb") as f:
-        # Use exact original filename so Streamtape displays the original movie/show title
-        encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
-        monitor = MultipartEncoderMonitor(encoder, on_progress)
-        headers = {"Content-Type": monitor.content_type}
-        upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
-
-    if upload_res.get("status") == 200:
-        return upload_res["result"]["url"]
-    else:
-        raise Exception(f"Upload failed: {upload_res.get('msg')}")
-
-def process_magnet_to_streamtape(magnet: str, login: str, key: str):
-    work_dir = "./cloud_downloads"
-    converted_dir = "./converted_videos"
+def background_worker_task(job_id: str, magnet: str, login: str, key: str):
+    """Executes the complete pipeline in a detached background thread."""
+    work_dir = f"./cloud_downloads_{job_id}"
+    converted_dir = f"./converted_{job_id}"
     
     cleanup_workspace([work_dir, converted_dir])
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(converted_dir, exist_ok=True)
     
-    progress_bar = st.progress(0, text="⚡ Initializing Cloud Engine... (0%)")
-    status_text = st.empty()
+    job = GLOBAL_STORAGE[job_id]
+    job["status"] = "running"
+    job["progress"] = 5
+    job["message"] = "📥 Step 1/3: Connecting to peer swarm & downloading torrent in cloud (5%)..."
     
-    # =========================================================================
-    # Step 1: Downloading via aria2c (0% -> 50%)
-    # =========================================================================
-    progress_bar.progress(5, text="📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)")
-    status_text.info("📥 Connecting to peer swarm...")
-    
+    # 1. Download Torrent via aria2c
     cmd_aria = [
         "aria2c",
         "--seed-time=0",
@@ -238,28 +214,29 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
                 overall_pct = int(5 + (torrent_pct * 0.45))
                 if overall_pct > last_pct:
                     last_pct = overall_pct
-                    progress_bar.progress(
-                        overall_pct,
-                        text=f"📥 Step 1/3: Downloading Torrent ({torrent_pct}% torrent | {overall_pct}% total)"
-                    )
+                    job["progress"] = overall_pct
+                    job["message"] = f"📥 Step 1/3: Downloading Torrent ({torrent_pct}% torrent | {overall_pct}% total)"
         
         proc.wait()
         if proc.returncode != 0:
-            st.error("Torrent download terminated with an error.")
-            return None
+            job["status"] = "error"
+            job["error"] = "Torrent download failed on cloud server."
+            cleanup_workspace([work_dir, converted_dir])
+            return
             
     except Exception as e:
-        st.error(f"Download failed: {str(e)}")
-        return None
+        job["status"] = "error"
+        job["error"] = f"Download error: {str(e)}"
+        cleanup_workspace([work_dir, converted_dir])
+        return
 
-    progress_bar.progress(50, text="✅ Step 1/3: Torrent Download Completed! (50%)")
+    job["progress"] = 50
+    job["message"] = "✅ Step 1/3: Torrent Download Completed! (50%)"
     time.sleep(0.5)
 
-    # =========================================================================
-    # Step 2: Locating & Remuxing Video (50% -> 70%) with Exact Name Preservation
-    # =========================================================================
-    progress_bar.progress(55, text="🎬 Step 2/3: Inspecting media codecs & preserving original title... (55%)")
-    status_text.info("🎬 Remuxing video container...")
+    # 2. Locate & Remux Video
+    job["progress"] = 55
+    job["message"] = "🎬 Step 2/3: Inspecting media codecs & remuxing container (55%)..."
     
     media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
     all_videos = []
@@ -267,18 +244,21 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
         all_videos.extend(glob.glob(f"{work_dir}/**/{ext}", recursive=True))
 
     if not all_videos:
-        st.error("No valid video stream found in the downloaded torrent.")
-        return None
+        job["status"] = "error"
+        job["error"] = "No valid video stream found in the downloaded torrent."
+        cleanup_workspace([work_dir, converted_dir])
+        return
 
     largest_video = max(all_videos, key=os.path.getsize)
     original_raw_name = os.path.basename(largest_video)
     
-    # Extract original base name without old extension and append .mp4
     base_title, _ = os.path.splitext(original_raw_name)
     target_filename = f"{base_title}.mp4"
     output_mp4 = os.path.join(converted_dir, target_filename)
     
-    progress_bar.progress(62, text=f"🎬 Step 2/3: Remuxing '{original_raw_name}' ➔ '{target_filename}' (62%)")
+    job["filename"] = target_filename
+    job["progress"] = 62
+    job["message"] = f"🎬 Step 2/3: Remuxing '{original_raw_name}' ➔ '{target_filename}' (62%)"
     
     if largest_video.endswith(".mp4"):
         shutil.copyfile(largest_video, output_mp4)
@@ -293,38 +273,54 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
         subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
-    progress_bar.progress(70, text=f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)")
+    job["size_mb"] = file_size_mb
+    job["progress"] = 70
+    job["message"] = f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)"
     time.sleep(0.5)
 
-    # =========================================================================
-    # Step 3: Direct Upload to Streamtape with Exact Original Filename
-    # =========================================================================
-    progress_bar.progress(70, text=f"🚀 Step 3/3: Uploading '{target_filename}' ({file_size_mb} MB)... (70%)")
+    # 3. Direct Upload to Streamtape
+    job["progress"] = 70
+    job["message"] = f"🚀 Step 3/3: Initializing Streamtape upload ({file_size_mb} MB)..."
 
-    streamtape_url = None
     try:
-        streamtape_url = upload_to_streamtape_with_progress(
-            output_mp4,
-            target_filename,
-            login,
-            key,
-            progress_bar,
-            status_text
-        )
-    except Exception as e:
-        st.error(f"Streamtape Upload failed: {str(e)}")
-        return None
+        url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
+        res = requests.get(url_req, timeout=15).json()
+        if res.get("status") != 200:
+            raise Exception(f"Streamtape API Error: {res.get('msg')}")
+        
+        upload_url = res["result"]["url"]
+        file_size = os.path.getsize(output_mp4)
 
-    progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
-    status_text.success(f"🎉 Successfully uploaded '{target_filename}' ({file_size_mb} MB) to Streamtape!")
-    
-    cleanup_workspace([work_dir, converted_dir])
-    
-    return {
-        "streamtape_url": streamtape_url,
-        "size_mb": file_size_mb,
-        "filename": target_filename
-    }
+        def on_upload_progress(monitor):
+            up_bytes = monitor.bytes_read
+            up_mb = round(up_bytes / (1024 * 1024), 2)
+            rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+            upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+            overall_pct = int(70 + (upload_pct * 0.30))
+            
+            job["progress"] = overall_pct
+            job["message"] = f"🚀 Step 3/3: Uploading '{target_filename}' ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
+
+        with open(output_mp4, "rb") as f:
+            encoder = MultipartEncoder(fields={"file": (target_filename, f, "video/mp4")})
+            monitor = MultipartEncoderMonitor(encoder, on_upload_progress)
+            headers = {"Content-Type": monitor.content_type}
+            upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
+        if upload_res.get("status") == 200:
+            streamtape_url = upload_res["result"]["url"]
+            job["progress"] = 100
+            job["status"] = "completed"
+            job["streamtape_url"] = streamtape_url
+            job["message"] = f"🎉 Successfully uploaded '{target_filename}' ({file_size_mb} MB) to Streamtape!"
+        else:
+            raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
+
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = f"Streamtape upload failed: {str(e)}"
+    finally:
+        cleanup_workspace([work_dir, converted_dir])
 
 # Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
@@ -332,7 +328,7 @@ with col1:
     convert_clicked = st.button("🚀 Convert & Push Directly to Streamtape")
 with col2:
     if st.button("Clear / Reset"):
-        st.session_state.result_data = None
+        st.session_state.current_job_id = None
         st.rerun()
 
 if convert_clicked:
@@ -347,32 +343,66 @@ if convert_clicked:
     elif not clean_login or not clean_key:
         st.error("⚠️ Please enter your Streamtape API Login and Key in the sidebar.")
     else:
-        try:
-            res = process_magnet_to_streamtape(clean_magnet, clean_login, clean_key)
-            if res:
-                st.session_state.result_data = res
-                st.balloons()
-        except Exception as e:
-            st.error(f"❌ Error during processing: {str(e)}")
+        # Generate persistent Job ID
+        job_id = hashlib.md5(clean_magnet.encode()).hexdigest()[:10]
+        st.session_state.current_job_id = job_id
+        
+        # Check if job already running on server
+        if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
+            GLOBAL_STORAGE[job_id] = {
+                "status": "starting",
+                "progress": 0,
+                "message": "⚡ Starting background cloud task...",
+                "filename": "",
+                "size_mb": 0,
+                "streamtape_url": "",
+                "error": ""
+            }
+            # Start detached background worker thread on cloud server
+            thread = threading.Thread(
+                target=background_worker_task,
+                args=(job_id, clean_magnet, clean_login, clean_key),
+                daemon=True
+            )
+            thread.start()
+            
+        st.rerun()
 
-# Display Results Card
-if st.session_state.result_data:
-    data = st.session_state.result_data
-    
-    st.markdown("---")
-    st.markdown(f"### 🎉 Streamtape Video Ready!")
-    st.markdown(f"**Exact File Title:** `{data['filename']}` | **Size:** `{data['size_mb']} MB`")
-    
-    st.markdown("#### 🔗 Your Streamtape Video Link:")
-    st.code(data["streamtape_url"], language="text")
-    
-    st.markdown(f"👉 [**▶️ Open Video on Streamtape**]({data['streamtape_url']})")
+# Real-Time Live Job Monitor (Works on phone browser minimizes & reconnects)
+if "current_job_id" in st.session_state and st.session_state.current_job_id:
+    active_id = st.session_state.current_job_id
+    if active_id in GLOBAL_STORAGE:
+        job = GLOBAL_STORAGE[active_id]
+        
+        st.markdown("---")
+        st.markdown("### 🔄 Cloud Processing Status")
+        
+        progress_bar = st.progress(job["progress"], text=f"{job['message']}")
+        
+        if job["status"] == "running" or job["status"] == "starting":
+            st.info(f"⏳ {job['message']}")
+            st.caption("📱 **Phone Safe:** You can minimize this tab, lock your screen, or switch apps. The cloud server will keep downloading and uploading in the background!")
+            time.sleep(2)
+            st.rerun()
+            
+        elif job["status"] == "completed":
+            st.balloons()
+            st.success(f"🎉 **Streamtape Video Ready!**")
+            st.markdown(f"**Exact File Title:** `{job['filename']}` | **Size:** `{job['size_mb']} MB`")
+            
+            st.markdown("#### 🔗 Your Streamtape Video Link:")
+            st.code(job["streamtape_url"], language="text")
+            
+            st.markdown(f"👉 [**▶️ Open Video on Streamtape**]({job['streamtape_url']})")
+            
+        elif job["status"] == "error":
+            st.error(f"❌ Error: {job.get('error', 'Unknown cloud processing error')}")
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How It Works & Streamtape Integration"):
+with st.expander("ℹ️ How It Works & Background Phone Processing"):
     st.markdown("""
+    - **📱 Background Cloud Threading:** Jobs run in detached Python threads on the server. If your phone browser disconnects or locks, the cloud server keeps downloading, converting, and uploading without stopping.
     - **Original Filename Preserved:** The exact title from the torrent (e.g. `Movie.Title.2026.1080p.x265.mp4`) is preserved and sent to Streamtape.
     - **Live MB Upload Progress:** Tracks exactly how many MBs have been uploaded, total MBs, percentage, and MBs remaining in real-time.
-    - **100% Direct & Cloud-Powered:** The cloud server downloads the torrent, converts it to MP4 with FFmpeg, and streams it directly to your Streamtape account over the official API.
     """)
