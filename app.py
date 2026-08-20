@@ -109,10 +109,10 @@ if not default_key:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP ➔ Streamtape Cloud</div>
-    <div class="hero-sub">Convert magnet links to MP4 and upload directly into your Streamtape account with live MB/progress tracking.</div>
+    <div class="hero-sub">Convert magnet links to MP4 and upload directly to Streamtape while preserving original filenames.</div>
     <div class="badge-container">
-        <span class="badge-st">🚀 Live Upload MB Tracker</span>
-        <span class="badge">💻 Zero Local PC Bandwidth</span>
+        <span class="badge-st">🚀 Original Filename Preserved</span>
+        <span class="badge">💻 Live MB Progress</span>
         <span class="badge">🎬 Fast MP4 Remuxing</span>
         <span class="badge">🆓 100% Free</span>
     </div>
@@ -154,8 +154,8 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def upload_to_streamtape_with_progress(file_path: str, login: str, key: str, progress_bar, status_text):
-    """Uploads file to Streamtape with real-time Uploaded MB, Total MB, and Remaining MB tracking."""
+def upload_to_streamtape_with_progress(file_path: str, custom_filename: str, login: str, key: str, progress_bar, status_text):
+    """Uploads file to Streamtape with original filename preservation and real-time MB tracking."""
     url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
     res = requests.get(url_req, timeout=15).json()
     if res.get("status") != 200:
@@ -164,7 +164,6 @@ def upload_to_streamtape_with_progress(file_path: str, login: str, key: str, pro
     upload_url = res["result"]["url"]
     file_size = os.path.getsize(file_path)
     file_size_mb = round(file_size / (1024 * 1024), 2)
-    filename = os.path.basename(file_path)
 
     def on_progress(monitor):
         up_bytes = monitor.bytes_read
@@ -177,14 +176,15 @@ def upload_to_streamtape_with_progress(file_path: str, login: str, key: str, pro
         
         progress_bar.progress(
             overall_pct,
-            text=f"🚀 Step 3/3: Uploading to Streamtape ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
+            text=f"🚀 Step 3/3: Uploading '{custom_filename}' ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
         )
         status_text.info(
             f"🚀 **Streamtape Upload:** `{up_mb} MB` / `{file_size_mb} MB` ({upload_pct}%) | ⏳ **Remaining:** `{rem_mb} MB`"
         )
 
     with open(file_path, "rb") as f:
-        encoder = MultipartEncoder(fields={"file": (filename, f, "video/mp4")})
+        # Use exact original filename so Streamtape displays the original movie/show title
+        encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
         monitor = MultipartEncoderMonitor(encoder, on_progress)
         headers = {"Content-Type": monitor.content_type}
         upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
@@ -196,10 +196,11 @@ def upload_to_streamtape_with_progress(file_path: str, login: str, key: str, pro
 
 def process_magnet_to_streamtape(magnet: str, login: str, key: str):
     work_dir = "./cloud_downloads"
-    output_mp4 = "./streamable_video.mp4"
+    converted_dir = "./converted_videos"
     
-    cleanup_workspace([work_dir, output_mp4])
+    cleanup_workspace([work_dir, converted_dir])
     os.makedirs(work_dir, exist_ok=True)
+    os.makedirs(converted_dir, exist_ok=True)
     
     progress_bar = st.progress(0, text="⚡ Initializing Cloud Engine... (0%)")
     status_text = st.empty()
@@ -255,9 +256,9 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
     time.sleep(0.5)
 
     # =========================================================================
-    # Step 2: Locating & Remuxing Video (50% -> 70%)
+    # Step 2: Locating & Remuxing Video (50% -> 70%) with Exact Name Preservation
     # =========================================================================
-    progress_bar.progress(55, text="🎬 Step 2/3: Repackaging video to standard MP4 stream... (55%)")
+    progress_bar.progress(55, text="🎬 Step 2/3: Inspecting media codecs & preserving original title... (55%)")
     status_text.info("🎬 Remuxing video container...")
     
     media_exts = ("*.mkv", "*.avi", "*.mp4", "*.ts", "*.mov", "*.webm", "*.m4v", "*.flv")
@@ -270,9 +271,14 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
         return None
 
     largest_video = max(all_videos, key=os.path.getsize)
-    original_filename = os.path.basename(largest_video)
+    original_raw_name = os.path.basename(largest_video)
     
-    progress_bar.progress(62, text=f"🎬 Step 2/3: Remuxing '{original_filename[:30]}...' (62%)")
+    # Extract original base name without old extension and append .mp4
+    base_title, _ = os.path.splitext(original_raw_name)
+    target_filename = f"{base_title}.mp4"
+    output_mp4 = os.path.join(converted_dir, target_filename)
+    
+    progress_bar.progress(62, text=f"🎬 Step 2/3: Remuxing '{original_raw_name}' ➔ '{target_filename}' (62%)")
     
     if largest_video.endswith(".mp4"):
         shutil.copyfile(largest_video, output_mp4)
@@ -287,18 +293,19 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
         subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
-    progress_bar.progress(70, text=f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB) (70%)")
+    progress_bar.progress(70, text=f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)")
     time.sleep(0.5)
 
     # =========================================================================
-    # Step 3: Direct Upload to Streamtape with Live MB & Remaining MB Tracking
+    # Step 3: Direct Upload to Streamtape with Exact Original Filename
     # =========================================================================
-    progress_bar.progress(70, text=f"🚀 Step 3/3: Initializing Streamtape upload ({file_size_mb} MB)... (70%)")
+    progress_bar.progress(70, text=f"🚀 Step 3/3: Uploading '{target_filename}' ({file_size_mb} MB)... (70%)")
 
     streamtape_url = None
     try:
         streamtape_url = upload_to_streamtape_with_progress(
             output_mp4,
+            target_filename,
             login,
             key,
             progress_bar,
@@ -309,14 +316,14 @@ def process_magnet_to_streamtape(magnet: str, login: str, key: str):
         return None
 
     progress_bar.progress(100, text="🎉 Step 3/3: Complete! 100%")
-    status_text.success(f"🎉 Successfully uploaded {file_size_mb} MB to your Streamtape account!")
+    status_text.success(f"🎉 Successfully uploaded '{target_filename}' ({file_size_mb} MB) to Streamtape!")
     
-    cleanup_workspace([work_dir, output_mp4])
+    cleanup_workspace([work_dir, converted_dir])
     
     return {
         "streamtape_url": streamtape_url,
         "size_mb": file_size_mb,
-        "filename": original_filename
+        "filename": target_filename
     }
 
 # Action Trigger Buttons
@@ -354,7 +361,7 @@ if st.session_state.result_data:
     
     st.markdown("---")
     st.markdown(f"### 🎉 Streamtape Video Ready!")
-    st.markdown(f"**File:** `{data['filename']}` | **Size:** `{data['size_mb']} MB`")
+    st.markdown(f"**Exact File Title:** `{data['filename']}` | **Size:** `{data['size_mb']} MB`")
     
     st.markdown("#### 🔗 Your Streamtape Video Link:")
     st.code(data["streamtape_url"], language="text")
@@ -365,7 +372,7 @@ if st.session_state.result_data:
 st.markdown("---")
 with st.expander("ℹ️ How It Works & Streamtape Integration"):
     st.markdown("""
+    - **Original Filename Preserved:** The exact title from the torrent (e.g. `Movie.Title.2026.1080p.x265.mp4`) is preserved and sent to Streamtape.
     - **Live MB Upload Progress:** Tracks exactly how many MBs have been uploaded, total MBs, percentage, and MBs remaining in real-time.
     - **100% Direct & Cloud-Powered:** The cloud server downloads the torrent, converts it to MP4 with FFmpeg, and streams it directly to your Streamtape account over the official API.
-    - **No Middlemen:** No 3rd-party temporary file hosts, no expiration links, and no remote download queue errors.
     """)
