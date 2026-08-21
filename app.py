@@ -12,7 +12,7 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncod
 
 # Page Configuration
 st.set_page_config(
-    page_title="MagToMP - Magnet to Streamtape Cloud",
+    page_title="MagToMP - Cloud Downloader & Video Mirror",
     page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -67,6 +67,15 @@ st.markdown("""
         font-weight: 600;
         border: 1px solid #4338ca;
     }
+    .badge-ls {
+        background-color: #701a75;
+        color: #f0abfc;
+        padding: 0.3rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border: 1px solid #86198f;
+    }
     .badge-bg {
         background-color: #064e3b;
         color: #6ee7b7;
@@ -95,59 +104,59 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Global Server-Side Job Manager (Persists even when phone browser tab is closed/minimized)
-if "GLOBAL_JOBS" not in st.session_state:
-    st.session_state.GLOBAL_JOBS = {}
-
+# Global Server-Side Job Manager
 @st.cache_resource
 def get_global_job_storage():
-    """Server-level persistent storage across all WebSocket reconnects."""
     return {}
 
 GLOBAL_STORAGE = get_global_job_storage()
 
-# Retrieve Default Secrets or Environment Variables
-default_login = ""
-default_key = ""
+# Retrieve Default Secrets
+st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
+st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
+ls_default_key = os.environ.get("LULUSTREAM_KEY", "")
 
 try:
     if "STREAMTAPE_LOGIN" in st.secrets:
-        default_login = st.secrets["STREAMTAPE_LOGIN"]
+        st_default_login = st.secrets["STREAMTAPE_LOGIN"]
     if "STREAMTAPE_KEY" in st.secrets:
-        default_key = st.secrets["STREAMTAPE_KEY"]
+        st_default_key = st.secrets["STREAMTAPE_KEY"]
+    if "LULUSTREAM_KEY" in st.secrets:
+        ls_default_key = st.secrets["LULUSTREAM_KEY"]
 except Exception:
     pass
-
-if not default_login:
-    default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
-if not default_key:
-    default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
 
 # Header Section
 st.markdown("""
 <div class="hero-container">
-    <div class="hero-title">⚡ MagToMP ➔ Streamtape Cloud</div>
-    <div class="hero-sub">Cloud torrent converter that runs in the background even if you minimize or lock your phone.</div>
+    <div class="hero-title">⚡ MagToMP Cloud Video Hub</div>
+    <div class="hero-sub">Convert torrents to MP4 and upload directly to Streamtape & LuluStream in the cloud.</div>
     <div class="badge-container">
         <span class="badge-bg">📱 Background Phone Safe</span>
-        <span class="badge-st">🚀 Direct Streamtape Upload</span>
+        <span class="badge-st">🚀 Streamtape Direct</span>
+        <span class="badge-ls">🟣 LuluStream Direct</span>
         <span class="badge">🏷️ Original Name Preserved</span>
-        <span class="badge">💻 Zero Local Bandwidth</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 # Sidebar Settings
 with st.sidebar:
-    st.header("⚡ Streamtape Account")
-    st.caption("Your credentials are used to push videos directly to your Streamtape dashboard.")
-    st_login = st.text_input("Streamtape API Login", value=default_login, type="default", placeholder="e.g. 1508538fc...")
-    st_key = st.text_input("Streamtape API Key", value=default_key, type="password", placeholder="e.g. 9OpkRzZ...")
+    st.header("⚡ Cloud Video Host Accounts")
     
+    st.subheader("1. Streamtape Account")
+    st_login = st.text_input("Streamtape API Login", value=st_default_login, type="default", placeholder="e.g. 1508538fc...")
+    st_key = st.text_input("Streamtape API Key", value=st_default_key, type="password", placeholder="e.g. 9OpkRzZ...")
     if st_login and st_key:
-        st.success("✅ Streamtape Account Connected!")
+        st.success("✅ Streamtape Connected")
+        
+    st.markdown("---")
+    st.subheader("2. LuluStream Account")
+    ls_key = st.text_input("LuluStream API Key", value=ls_default_key, type="password", placeholder="e.g. 45e38snhs9wa0unhv")
+    if ls_key:
+        st.success("✅ LuluStream Connected")
     else:
-        st.info("💡 Enter your login & key above, or add them in Streamlit Secrets.")
+        st.info("💡 Enter your LuluStream API key to mirror to LuluStream.")
         
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
@@ -157,7 +166,22 @@ magnet_input = st.text_area(
     "Paste Magnet Link",
     placeholder="magnet:?xt=urn:btih:d0c3a647d6928e469792036c05a18a99479e0809...",
     height=110,
-    help="Paste a valid torrent magnet link to start the cloud transfer directly to Streamtape."
+    help="Paste a valid torrent magnet link to start the cloud transfer."
+)
+
+# Upload Destination Selection
+dest_options = []
+if st_login and st_key:
+    dest_options.append("Streamtape")
+if ls_key:
+    dest_options.append("LuluStream")
+if not dest_options:
+    dest_options = ["Streamtape", "LuluStream"]
+
+selected_destinations = st.multiselect(
+    "Select Upload Destination(s):",
+    ["Streamtape", "LuluStream"],
+    default=["Streamtape"] if "Streamtape" in dest_options else dest_options
 )
 
 def cleanup_workspace(dirs_to_clean):
@@ -172,7 +196,72 @@ def cleanup_workspace(dirs_to_clean):
                 except Exception:
                     pass
 
-def background_worker_task(job_id: str, magnet: str, login: str, key: str):
+def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: str, job_dict):
+    """Uploads directly to Streamtape with live MB tracking."""
+    url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
+    res = requests.get(url_req, timeout=15).json()
+    if res.get("status") != 200:
+        raise Exception(f"Streamtape API Error: {res.get('msg')}")
+    
+    upload_url = res["result"]["url"]
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+
+    def on_progress(monitor):
+        up_bytes = monitor.bytes_read
+        up_mb = round(up_bytes / (1024 * 1024), 2)
+        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+        job_dict["message"] = f"🚀 Uploading to Streamtape: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
+
+    with open(file_path, "rb") as f:
+        encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
+        monitor = MultipartEncoderMonitor(encoder, on_progress)
+        headers = {"Content-Type": monitor.content_type}
+        upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
+    if upload_res.get("status") == 200:
+        return upload_res["result"]["url"]
+    else:
+        raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
+
+def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job_dict):
+    """Uploads directly to LuluStream with live MB tracking."""
+    # Step 1: Get active upload server
+    srv_req = f"https://lulustream.com/api/upload/server?key={api_key}"
+    srv_res = requests.get(srv_req, timeout=15).json()
+    if srv_res.get("status") != 200:
+        raise Exception(f"LuluStream Server Error: {srv_res.get('msg')}")
+        
+    upload_server_url = srv_res.get("result")
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+
+    def on_ls_progress(monitor):
+        up_bytes = monitor.bytes_read
+        up_mb = round(up_bytes / (1024 * 1024), 2)
+        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+        job_dict["message"] = f"🟣 Uploading to LuluStream: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
+
+    with open(file_path, "rb") as f:
+        encoder = MultipartEncoder(fields={
+            "key": api_key,
+            "file": (custom_filename, f, "video/mp4"),
+            "file_title": custom_filename
+        })
+        monitor = MultipartEncoderMonitor(encoder, on_ls_progress)
+        headers = {"Content-Type": monitor.content_type}
+        upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
+
+    if upload_res.get("status") == 200 and upload_res.get("files"):
+        file_code = upload_res["files"][0].get("filecode")
+        view_url = f"https://lulustream.com/{file_code}"
+        return view_url
+    else:
+        raise Exception(f"LuluStream upload failed: {upload_res}")
+
+def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tuple, ls_key: str):
     """Executes the complete pipeline in a detached background thread."""
     work_dir = f"./cloud_downloads_{job_id}"
     converted_dir = f"./converted_{job_id}"
@@ -184,7 +273,7 @@ def background_worker_task(job_id: str, magnet: str, login: str, key: str):
     job = GLOBAL_STORAGE[job_id]
     job["status"] = "running"
     job["progress"] = 5
-    job["message"] = "📥 Step 1/3: Connecting to peer swarm & downloading torrent in cloud (5%)..."
+    job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
     
     # 1. Download Torrent via aria2c
     cmd_aria = [
@@ -278,54 +367,36 @@ def background_worker_task(job_id: str, magnet: str, login: str, key: str):
     job["message"] = f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)"
     time.sleep(0.5)
 
-    # 3. Direct Upload to Streamtape
-    job["progress"] = 70
-    job["message"] = f"🚀 Step 3/3: Initializing Streamtape upload ({file_size_mb} MB)..."
-
+    # 3. Upload to Selected Destinations
     try:
-        url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
-        res = requests.get(url_req, timeout=15).json()
-        if res.get("status") != 200:
-            raise Exception(f"Streamtape API Error: {res.get('msg')}")
-        
-        upload_url = res["result"]["url"]
-        file_size = os.path.getsize(output_mp4)
+        # Streamtape Upload
+        if "Streamtape" in targets and st_creds[0] and st_creds[1]:
+            job["progress"] = 75
+            job["message"] = f"🚀 Step 3/3: Uploading to Streamtape ({file_size_mb} MB)..."
+            st_url = upload_to_streamtape(output_mp4, target_filename, st_creds[0], st_creds[1], job)
+            job["streamtape_url"] = st_url
 
-        def on_upload_progress(monitor):
-            up_bytes = monitor.bytes_read
-            up_mb = round(up_bytes / (1024 * 1024), 2)
-            rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
-            upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
-            overall_pct = int(70 + (upload_pct * 0.30))
-            
-            job["progress"] = overall_pct
-            job["message"] = f"🚀 Step 3/3: Uploading '{target_filename}' ({up_mb} MB / {file_size_mb} MB) • Remaining: {rem_mb} MB ({upload_pct}%)"
+        # LuluStream Upload
+        if "LuluStream" in targets and ls_key:
+            job["progress"] = 85
+            job["message"] = f"🟣 Step 3/3: Uploading to LuluStream ({file_size_mb} MB)..."
+            ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key, job)
+            job["lulustream_url"] = ls_url
 
-        with open(output_mp4, "rb") as f:
-            encoder = MultipartEncoder(fields={"file": (target_filename, f, "video/mp4")})
-            monitor = MultipartEncoderMonitor(encoder, on_upload_progress)
-            headers = {"Content-Type": monitor.content_type}
-            upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
-
-        if upload_res.get("status") == 200:
-            streamtape_url = upload_res["result"]["url"]
-            job["progress"] = 100
-            job["status"] = "completed"
-            job["streamtape_url"] = streamtape_url
-            job["message"] = f"🎉 Successfully uploaded '{target_filename}' ({file_size_mb} MB) to Streamtape!"
-        else:
-            raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
+        job["progress"] = 100
+        job["status"] = "completed"
+        job["message"] = f"🎉 Successfully converted & mirrored '{target_filename}' ({file_size_mb} MB)!"
 
     except Exception as e:
         job["status"] = "error"
-        job["error"] = f"Streamtape upload failed: {str(e)}"
+        job["error"] = f"Upload error: {str(e)}"
     finally:
         cleanup_workspace([work_dir, converted_dir])
 
 # Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
 with col1:
-    convert_clicked = st.button("🚀 Convert & Push Directly to Streamtape")
+    convert_clicked = st.button("🚀 Convert & Mirror to Selected Hosts")
 with col2:
     if st.button("Clear / Reset"):
         st.session_state.current_job_id = None
@@ -333,42 +404,44 @@ with col2:
 
 if convert_clicked:
     clean_magnet = magnet_input.strip()
-    clean_login = st_login.strip()
-    clean_key = st_key.strip()
     
     if not clean_magnet:
         st.warning("⚠️ Please paste a magnet link into the box above.")
     elif not clean_magnet.startswith("magnet:?"):
         st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
-    elif not clean_login or not clean_key:
-        st.error("⚠️ Please enter your Streamtape API Login and Key in the sidebar.")
+    elif not selected_destinations:
+        st.error("⚠️ Please select at least one upload destination (Streamtape or LuluStream).")
     else:
-        # Generate persistent Job ID
-        job_id = hashlib.md5(clean_magnet.encode()).hexdigest()[:10]
-        st.session_state.current_job_id = job_id
-        
-        # Check if job already running on server
-        if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
-            GLOBAL_STORAGE[job_id] = {
-                "status": "starting",
-                "progress": 0,
-                "message": "⚡ Starting background cloud task...",
-                "filename": "",
-                "size_mb": 0,
-                "streamtape_url": "",
-                "error": ""
-            }
-            # Start detached background worker thread on cloud server
-            thread = threading.Thread(
-                target=background_worker_task,
-                args=(job_id, clean_magnet, clean_login, clean_key),
-                daemon=True
-            )
-            thread.start()
+        # Check credentials for chosen destinations
+        if "Streamtape" in selected_destinations and (not st_login or not st_key):
+            st.error("⚠️ Please enter Streamtape Login and Key in the sidebar.")
+        elif "LuluStream" in selected_destinations and not ls_key:
+            st.error("⚠️ Please enter your LuluStream API Key in the sidebar.")
+        else:
+            job_id = hashlib.md5(clean_magnet.encode()).hexdigest()[:10]
+            st.session_state.current_job_id = job_id
             
-        st.rerun()
+            if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
+                GLOBAL_STORAGE[job_id] = {
+                    "status": "starting",
+                    "progress": 0,
+                    "message": "⚡ Starting background cloud task...",
+                    "filename": "",
+                    "size_mb": 0,
+                    "streamtape_url": "",
+                    "lulustream_url": "",
+                    "error": ""
+                }
+                thread = threading.Thread(
+                    target=background_worker_task,
+                    args=(job_id, clean_magnet, selected_destinations, (st_login.strip(), st_key.strip()), ls_key.strip()),
+                    daemon=True
+                )
+                thread.start()
+                
+            st.rerun()
 
-# Real-Time Live Job Monitor (Works on phone browser minimizes & reconnects)
+# Real-Time Live Job Monitor
 if "current_job_id" in st.session_state and st.session_state.current_job_id:
     active_id = st.session_state.current_job_id
     if active_id in GLOBAL_STORAGE:
@@ -381,28 +454,35 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
         
         if job["status"] == "running" or job["status"] == "starting":
             st.info(f"⏳ {job['message']}")
-            st.caption("📱 **Phone Safe:** You can minimize this tab, lock your screen, or switch apps. The cloud server will keep downloading and uploading in the background!")
+            st.caption("📱 **Phone Safe:** You can minimize this tab, lock your screen, or switch apps. The cloud server continues in the background.")
             time.sleep(2)
             st.rerun()
             
         elif job["status"] == "completed":
             st.balloons()
-            st.success(f"🎉 **Streamtape Video Ready!**")
+            st.success(f"🎉 **Video Conversion & Mirroring Ready!**")
             st.markdown(f"**Exact File Title:** `{job['filename']}` | **Size:** `{job['size_mb']} MB`")
             
-            st.markdown("#### 🔗 Your Streamtape Video Link:")
-            st.code(job["streamtape_url"], language="text")
-            
-            st.markdown(f"👉 [**▶️ Open Video on Streamtape**]({job['streamtape_url']})")
+            # Streamtape Card
+            if job.get("streamtape_url"):
+                st.markdown("#### 🚀 Streamtape Video Link:")
+                st.code(job["streamtape_url"], language="text")
+                st.markdown(f"👉 [**▶️ Open on Streamtape**]({job['streamtape_url']})")
+                
+            # LuluStream Card
+            if job.get("lulustream_url"):
+                st.markdown("#### 🟣 LuluStream Video Link:")
+                st.code(job["lulustream_url"], language="text")
+                st.markdown(f"👉 [**▶️ Open on LuluStream**]({job['lulustream_url']})")
             
         elif job["status"] == "error":
             st.error(f"❌ Error: {job.get('error', 'Unknown cloud processing error')}")
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How It Works & Background Phone Processing"):
+with st.expander("ℹ️ Supported Hosts & Configuration"):
     st.markdown("""
-    - **📱 Background Cloud Threading:** Jobs run in detached Python threads on the server. If your phone browser disconnects or locks, the cloud server keeps downloading, converting, and uploading without stopping.
-    - **Original Filename Preserved:** The exact title from the torrent (e.g. `Movie.Title.2026.1080p.x265.mp4`) is preserved and sent to Streamtape.
-    - **Live MB Upload Progress:** Tracks exactly how many MBs have been uploaded, total MBs, percentage, and MBs remaining in real-time.
+    - **Streamtape Support:** Direct official API integration (`POST /file/ul`) with live byte tracking.
+    - **LuluStream Support:** Full official REST API integration with active server discovery (`/api/upload/server`) and instant video page generation (`https://lulustream.com/{filecode}`).
+    - **Multi-Host Mirroring:** You can select both Streamtape AND LuluStream to mirror the torrent to both video hosts in one single run!
     """)
