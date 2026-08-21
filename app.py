@@ -159,12 +159,16 @@ with st.sidebar:
     ls_key = st.text_input("LuluStream API Key", value=ls_default_key, type="password", placeholder="e.g. 45e38snhs9wa0unhv")
     if ls_key:
         st.success("✅ LuluStream Connected")
+    else:
+        st.info("💡 Enter your LuluStream API key to mirror to LuluStream.")
         
     st.markdown("---")
     st.subheader("3. Vidara.so Account")
     vd_key = st.text_input("Vidara.so API Key", value=vd_default_key, type="password", placeholder="e.g. 106616nzdp9q106rynvzm0")
     if vd_key:
         st.success("✅ Vidara Connected")
+    else:
+        st.info("💡 Enter your Vidara.so API key to mirror to Vidara.")
         
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
@@ -229,7 +233,7 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
     with open(file_path, "rb") as f:
         encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
         monitor = MultipartEncoderMonitor(encoder, on_progress)
-        headers = {"Content-Type": monitor.content_type}
+        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
         upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
 
     if upload_res.get("status") == 200:
@@ -258,11 +262,12 @@ def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job
     with open(file_path, "rb") as f:
         encoder = MultipartEncoder(fields={
             "key": api_key,
+            "api_key": api_key,
             "file": (custom_filename, f, "video/mp4"),
             "file_title": custom_filename
         })
         monitor = MultipartEncoderMonitor(encoder, on_ls_progress)
-        headers = {"Content-Type": monitor.content_type}
+        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
         upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
 
     if upload_res.get("status") == 200 and upload_res.get("files"):
@@ -273,7 +278,7 @@ def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job
         raise Exception(f"LuluStream upload failed: {upload_res}")
 
 def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dict):
-    """Uploads directly to Vidara.so with live MB tracking."""
+    """Uploads directly to Vidara.so with multi-field compatibility and live tracking."""
     srv_req = f"https://api.vidara.so/v1/upload/server?api_key={api_key}"
     srv_res = requests.get(srv_req, timeout=15).json()
     if srv_res.get("status") != 200 or not srv_res.get("result", {}).get("upload_server"):
@@ -291,21 +296,29 @@ def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dic
         job_dict["message"] = f"🟢 Uploading to Vidara: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
 
     with open(file_path, "rb") as f:
+        # Send both 'key' and 'api_key' to ensure 100% backend compatibility
         encoder = MultipartEncoder(fields={
+            "key": api_key,
             "api_key": api_key,
             "file": (custom_filename, f, "video/mp4"),
-            "title": custom_filename
+            "title": custom_filename,
+            "file_title": custom_filename
         })
         monitor = MultipartEncoderMonitor(encoder, on_vd_progress)
-        headers = {"Content-Type": monitor.content_type}
+        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
         upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
 
     if upload_res.get("url"):
         return upload_res["url"]
     elif upload_res.get("filecode"):
         return f"https://vidara.so/v/{upload_res['filecode']}"
+    elif upload_res.get("result", {}).get("url"):
+        return upload_res["result"]["url"]
+    elif upload_res.get("result", {}).get("filecode"):
+        return f"https://vidara.so/v/{upload_res['result']['filecode']}"
     else:
-        raise Exception(f"Vidara upload failed: {upload_res}")
+        err_msg = upload_res.get("error") or upload_res.get("msg") or upload_res
+        raise Exception(f"Vidara error: {err_msg}")
 
 def background_worker_task(job_id: str, input_url: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str):
     """Executes the complete pipeline in a detached background thread."""
@@ -322,7 +335,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     
     is_magnet = input_url.startswith("magnet:?")
     
-    # 1. Download via aria2c (Handles both torrent magnets AND direct HTTP/HTTPS URLs with 16 connections!)
+    # 1. Download via aria2c (16 parallel connections)
     if is_magnet:
         job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
         cmd_aria = [
@@ -335,7 +348,6 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             input_url
         ]
     else:
-        # Extract suggested filename from HTTP URL path
         parsed_url = urlparse(input_url)
         path_name = os.path.basename(unquote(parsed_url.path))
         out_opt = [f"--out={path_name}"] if path_name else []
@@ -372,7 +384,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         proc.wait()
         if proc.returncode != 0:
             job["status"] = "error"
-            job["error"] = "Download failed on cloud server. Verify the URL is valid and accessible."
+            job["error"] = "Download failed on cloud server. Verify the URL/Magnet is accessible."
             cleanup_workspace([work_dir, converted_dir])
             return
             
@@ -430,38 +442,51 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     job["message"] = f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)"
     time.sleep(0.5)
 
-    # 3. Upload to Selected Destinations
-    try:
-        # Streamtape
-        if "Streamtape" in targets and st_creds[0] and st_creds[1]:
+    # 3. Fault-Tolerant Multi-Host Uploads
+    upload_errors = []
+    
+    # Streamtape
+    if "Streamtape" in targets and st_creds[0] and st_creds[1]:
+        try:
             job["progress"] = 75
             job["message"] = f"🚀 Step 3/3: Uploading to Streamtape ({file_size_mb} MB)..."
             st_url = upload_to_streamtape(output_mp4, target_filename, st_creds[0], st_creds[1], job)
             job["streamtape_url"] = st_url
+        except Exception as e:
+            upload_errors.append(f"Streamtape: {str(e)}")
 
-        # LuluStream
-        if "LuluStream" in targets and ls_key:
+    # LuluStream
+    if "LuluStream" in targets and ls_key:
+        try:
             job["progress"] = 82
             job["message"] = f"🟣 Step 3/3: Uploading to LuluStream ({file_size_mb} MB)..."
             ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key, job)
             job["lulustream_url"] = ls_url
+        except Exception as e:
+            upload_errors.append(f"LuluStream: {str(e)}")
 
-        # Vidara.so
-        if "Vidara.so" in targets and vd_key:
+    # Vidara.so
+    if "Vidara.so" in targets and vd_key:
+        try:
             job["progress"] = 90
             job["message"] = f"🟢 Step 3/3: Uploading to Vidara.so ({file_size_mb} MB)..."
             vd_url = upload_to_vidara(output_mp4, target_filename, vd_key, job)
             job["vidara_url"] = vd_url
+        except Exception as e:
+            upload_errors.append(f"Vidara.so: {str(e)}")
 
-        job["progress"] = 100
+    job["progress"] = 100
+    
+    if job.get("streamtape_url") or job.get("lulustream_url") or job.get("vidara_url"):
         job["status"] = "completed"
-        job["message"] = f"🎉 Successfully converted & mirrored '{target_filename}' ({file_size_mb} MB)!"
-
-    except Exception as e:
+        if upload_errors:
+            job["error"] = " | ".join(upload_errors)
+        job["message"] = f"🎉 Successfully mirrored '{target_filename}' ({file_size_mb} MB)!"
+    else:
         job["status"] = "error"
-        job["error"] = f"Upload error: {str(e)}"
-    finally:
-        cleanup_workspace([work_dir, converted_dir])
+        job["error"] = " | ".join(upload_errors) if upload_errors else "All destination uploads failed."
+        
+    cleanup_workspace([work_dir, converted_dir])
 
 # Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
@@ -559,6 +584,9 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
                 st.markdown("#### 🟢 Vidara.so Video Link:")
                 st.code(job["vidara_url"], language="text")
                 st.markdown(f"👉 [**▶️ Open on Vidara.so**]({job['vidara_url']})")
+                
+            if job.get("error"):
+                st.warning(f"⚠️ Note on secondary hosts: {job['error']}")
             
         elif job["status"] == "error":
             st.error(f"❌ Error: {job.get('error', 'Unknown cloud processing error')}")
