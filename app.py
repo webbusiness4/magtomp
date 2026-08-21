@@ -12,7 +12,7 @@ from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncod
 
 # Page Configuration
 st.set_page_config(
-    page_title="MagToMP - Cloud Downloader & Video Mirror",
+    page_title="MagToMP - Cloud Video Hub",
     page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
@@ -76,14 +76,14 @@ st.markdown("""
         font-weight: 600;
         border: 1px solid #86198f;
     }
-    .badge-bg {
-        background-color: #064e3b;
+    .badge-vd {
+        background-color: #065f46;
         color: #6ee7b7;
         padding: 0.3rem 0.75rem;
         border-radius: 9999px;
         font-size: 0.75rem;
         font-weight: 600;
-        border: 1px solid #059669;
+        border: 1px solid #047857;
     }
     .stButton>button {
         width: 100%;
@@ -115,6 +115,7 @@ GLOBAL_STORAGE = get_global_job_storage()
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
 ls_default_key = os.environ.get("LULUSTREAM_KEY", "")
+vd_default_key = os.environ.get("VIDARA_KEY", "")
 
 try:
     if "STREAMTAPE_LOGIN" in st.secrets:
@@ -123,6 +124,8 @@ try:
         st_default_key = st.secrets["STREAMTAPE_KEY"]
     if "LULUSTREAM_KEY" in st.secrets:
         ls_default_key = st.secrets["LULUSTREAM_KEY"]
+    if "VIDARA_KEY" in st.secrets:
+        vd_default_key = st.secrets["VIDARA_KEY"]
 except Exception:
     pass
 
@@ -130,12 +133,12 @@ except Exception:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP Cloud Video Hub</div>
-    <div class="hero-sub">Convert torrents to MP4 and upload directly to Streamtape & LuluStream in the cloud.</div>
+    <div class="hero-sub">Convert torrents to MP4 and upload directly to Streamtape, LuluStream & Vidara in the cloud.</div>
     <div class="badge-container">
-        <span class="badge-bg">📱 Background Phone Safe</span>
-        <span class="badge-st">🚀 Streamtape Direct</span>
-        <span class="badge-ls">🟣 LuluStream Direct</span>
-        <span class="badge">🏷️ Original Name Preserved</span>
+        <span class="badge-st">🚀 Streamtape</span>
+        <span class="badge-ls">🟣 LuluStream</span>
+        <span class="badge-vd">🟢 Vidara.so</span>
+        <span class="badge">📱 Phone-Safe Background</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -155,8 +158,12 @@ with st.sidebar:
     ls_key = st.text_input("LuluStream API Key", value=ls_default_key, type="password", placeholder="e.g. 45e38snhs9wa0unhv")
     if ls_key:
         st.success("✅ LuluStream Connected")
-    else:
-        st.info("💡 Enter your LuluStream API key to mirror to LuluStream.")
+        
+    st.markdown("---")
+    st.subheader("3. Vidara.so Account")
+    vd_key = st.text_input("Vidara.so API Key", value=vd_default_key, type="password", placeholder="e.g. 106616nzdp9q106rynvzm0")
+    if vd_key:
+        st.success("✅ Vidara Connected")
         
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
@@ -170,18 +177,22 @@ magnet_input = st.text_area(
 )
 
 # Upload Destination Selection
-dest_options = []
+available_destinations = ["Streamtape", "LuluStream", "Vidara.so"]
+default_selected = []
 if st_login and st_key:
-    dest_options.append("Streamtape")
+    default_selected.append("Streamtape")
 if ls_key:
-    dest_options.append("LuluStream")
-if not dest_options:
-    dest_options = ["Streamtape", "LuluStream"]
+    default_selected.append("LuluStream")
+if vd_key:
+    default_selected.append("Vidara.so")
+
+if not default_selected:
+    default_selected = ["Streamtape"]
 
 selected_destinations = st.multiselect(
     "Select Upload Destination(s):",
-    ["Streamtape", "LuluStream"],
-    default=["Streamtape"] if "Streamtape" in dest_options else dest_options
+    available_destinations,
+    default=default_selected
 )
 
 def cleanup_workspace(dirs_to_clean):
@@ -227,7 +238,6 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
 
 def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job_dict):
     """Uploads directly to LuluStream with live MB tracking."""
-    # Step 1: Get active upload server
     srv_req = f"https://lulustream.com/api/upload/server?key={api_key}"
     srv_res = requests.get(srv_req, timeout=15).json()
     if srv_res.get("status") != 200:
@@ -261,7 +271,43 @@ def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job
     else:
         raise Exception(f"LuluStream upload failed: {upload_res}")
 
-def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tuple, ls_key: str):
+def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dict):
+    """Uploads directly to Vidara.so with live MB tracking."""
+    # Step 1: Get active upload server
+    srv_req = f"https://api.vidara.so/v1/upload/server?api_key={api_key}"
+    srv_res = requests.get(srv_req, timeout=15).json()
+    if srv_res.get("status") != 200 or not srv_res.get("result", {}).get("upload_server"):
+        raise Exception(f"Vidara Server Error: {srv_res.get('msg')}")
+        
+    upload_server_url = srv_res["result"]["upload_server"]
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+
+    def on_vd_progress(monitor):
+        up_bytes = monitor.bytes_read
+        up_mb = round(up_bytes / (1024 * 1024), 2)
+        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+        job_dict["message"] = f"🟢 Uploading to Vidara: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
+
+    with open(file_path, "rb") as f:
+        encoder = MultipartEncoder(fields={
+            "api_key": api_key,
+            "file": (custom_filename, f, "video/mp4"),
+            "title": custom_filename
+        })
+        monitor = MultipartEncoderMonitor(encoder, on_vd_progress)
+        headers = {"Content-Type": monitor.content_type}
+        upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
+
+    if upload_res.get("url"):
+        return upload_res["url"]
+    elif upload_res.get("filecode"):
+        return f"https://vidara.so/v/{upload_res['filecode']}"
+    else:
+        raise Exception(f"Vidara upload failed: {upload_res}")
+
+def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str):
     """Executes the complete pipeline in a detached background thread."""
     work_dir = f"./cloud_downloads_{job_id}"
     converted_dir = f"./converted_{job_id}"
@@ -369,19 +415,26 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
 
     # 3. Upload to Selected Destinations
     try:
-        # Streamtape Upload
+        # Streamtape
         if "Streamtape" in targets and st_creds[0] and st_creds[1]:
             job["progress"] = 75
             job["message"] = f"🚀 Step 3/3: Uploading to Streamtape ({file_size_mb} MB)..."
             st_url = upload_to_streamtape(output_mp4, target_filename, st_creds[0], st_creds[1], job)
             job["streamtape_url"] = st_url
 
-        # LuluStream Upload
+        # LuluStream
         if "LuluStream" in targets and ls_key:
-            job["progress"] = 85
+            job["progress"] = 82
             job["message"] = f"🟣 Step 3/3: Uploading to LuluStream ({file_size_mb} MB)..."
             ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key, job)
             job["lulustream_url"] = ls_url
+
+        # Vidara.so
+        if "Vidara.so" in targets and vd_key:
+            job["progress"] = 90
+            job["message"] = f"🟢 Step 3/3: Uploading to Vidara.so ({file_size_mb} MB)..."
+            vd_url = upload_to_vidara(output_mp4, target_filename, vd_key, job)
+            job["vidara_url"] = vd_url
 
         job["progress"] = 100
         job["status"] = "completed"
@@ -410,13 +463,15 @@ if convert_clicked:
     elif not clean_magnet.startswith("magnet:?"):
         st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
     elif not selected_destinations:
-        st.error("⚠️ Please select at least one upload destination (Streamtape or LuluStream).")
+        st.error("⚠️ Please select at least one upload destination (Streamtape, LuluStream, or Vidara).")
     else:
         # Check credentials for chosen destinations
         if "Streamtape" in selected_destinations and (not st_login or not st_key):
             st.error("⚠️ Please enter Streamtape Login and Key in the sidebar.")
         elif "LuluStream" in selected_destinations and not ls_key:
             st.error("⚠️ Please enter your LuluStream API Key in the sidebar.")
+        elif "Vidara.so" in selected_destinations and not vd_key:
+            st.error("⚠️ Please enter your Vidara.so API Key in the sidebar.")
         else:
             job_id = hashlib.md5(clean_magnet.encode()).hexdigest()[:10]
             st.session_state.current_job_id = job_id
@@ -430,11 +485,19 @@ if convert_clicked:
                     "size_mb": 0,
                     "streamtape_url": "",
                     "lulustream_url": "",
+                    "vidara_url": "",
                     "error": ""
                 }
                 thread = threading.Thread(
                     target=background_worker_task,
-                    args=(job_id, clean_magnet, selected_destinations, (st_login.strip(), st_key.strip()), ls_key.strip()),
+                    args=(
+                        job_id,
+                        clean_magnet,
+                        selected_destinations,
+                        (st_login.strip(), st_key.strip()),
+                        ls_key.strip(),
+                        vd_key.strip()
+                    ),
                     daemon=True
                 )
                 thread.start()
@@ -460,7 +523,7 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
             
         elif job["status"] == "completed":
             st.balloons()
-            st.success(f"🎉 **Video Conversion & Mirroring Ready!**")
+            st.success(f"🎉 **Video Conversion & Multi-Host Mirroring Ready!**")
             st.markdown(f"**Exact File Title:** `{job['filename']}` | **Size:** `{job['size_mb']} MB`")
             
             # Streamtape Card
@@ -474,6 +537,12 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
                 st.markdown("#### 🟣 LuluStream Video Link:")
                 st.code(job["lulustream_url"], language="text")
                 st.markdown(f"👉 [**▶️ Open on LuluStream**]({job['lulustream_url']})")
+
+            # Vidara Card
+            if job.get("vidara_url"):
+                st.markdown("#### 🟢 Vidara.so Video Link:")
+                st.code(job["vidara_url"], language="text")
+                st.markdown(f"👉 [**▶️ Open on Vidara.so**]({job['vidara_url']})")
             
         elif job["status"] == "error":
             st.error(f"❌ Error: {job.get('error', 'Unknown cloud processing error')}")
@@ -483,6 +552,7 @@ st.markdown("---")
 with st.expander("ℹ️ Supported Hosts & Configuration"):
     st.markdown("""
     - **Streamtape Support:** Direct official API integration (`POST /file/ul`) with live byte tracking.
-    - **LuluStream Support:** Full official REST API integration with active server discovery (`/api/upload/server`) and instant video page generation (`https://lulustream.com/{filecode}`).
-    - **Multi-Host Mirroring:** You can select both Streamtape AND LuluStream to mirror the torrent to both video hosts in one single run!
+    - **LuluStream Support:** Full REST API integration with active server discovery (`/api/upload/server`).
+    - **Vidara.so Support:** Full REST API integration (`/v1/upload/server` & direct multipart upload).
+    - **Multi-Host Mirroring:** You can select Streamtape, LuluStream, and Vidara to mirror the torrent to all 3 video hosts simultaneously in a single cloud run!
     """)
