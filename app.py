@@ -8,6 +8,7 @@ import re
 import time
 import threading
 import hashlib
+from urllib.parse import urlparse, unquote
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 # Page Configuration
@@ -133,12 +134,12 @@ except Exception:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP Cloud Video Hub</div>
-    <div class="hero-sub">Convert torrents to MP4 and upload directly to Streamtape, LuluStream & Vidara in the cloud.</div>
+    <div class="hero-sub">Mirror torrent magnets & Seedr/Direct HTTP links directly to Streamtape, LuluStream & Vidara.</div>
     <div class="badge-container">
+        <span class="badge">🧲 Magnet & 🔗 HTTP Direct</span>
         <span class="badge-st">🚀 Streamtape</span>
         <span class="badge-ls">🟣 LuluStream</span>
         <span class="badge-vd">🟢 Vidara.so</span>
-        <span class="badge">📱 Phone-Safe Background</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -169,11 +170,11 @@ with st.sidebar:
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
 
 # Input Section
-magnet_input = st.text_area(
-    "Paste Magnet Link",
-    placeholder="magnet:?xt=urn:btih:d0c3a647d6928e469792036c05a18a99479e0809...",
+link_input = st.text_area(
+    "Paste Magnet Link or Direct Download URL (Seedr, Debrid, Web)",
+    placeholder="Paste magnet:?xt=urn:btih:... OR https://rd22.seedr.cc/ff_get/.../video.mp4...",
     height=110,
-    help="Paste a valid torrent magnet link to start the cloud transfer."
+    help="Supports both torrent magnet links AND direct HTTP/HTTPS video URLs (Seedr, Real-Debrid, direct mp4 links)."
 )
 
 # Upload Destination Selection
@@ -273,7 +274,6 @@ def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job
 
 def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dict):
     """Uploads directly to Vidara.so with live MB tracking."""
-    # Step 1: Get active upload server
     srv_req = f"https://api.vidara.so/v1/upload/server?api_key={api_key}"
     srv_res = requests.get(srv_req, timeout=15).json()
     if srv_res.get("status") != 200 or not srv_res.get("result", {}).get("upload_server"):
@@ -307,7 +307,7 @@ def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dic
     else:
         raise Exception(f"Vidara upload failed: {upload_res}")
 
-def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str):
+def background_worker_task(job_id: str, input_url: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str):
     """Executes the complete pipeline in a detached background thread."""
     work_dir = f"./cloud_downloads_{job_id}"
     converted_dir = f"./converted_{job_id}"
@@ -319,18 +319,35 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
     job = GLOBAL_STORAGE[job_id]
     job["status"] = "running"
     job["progress"] = 5
-    job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
     
-    # 1. Download Torrent via aria2c
-    cmd_aria = [
-        "aria2c",
-        "--seed-time=0",
-        "--max-connection-per-server=16",
-        "--split=16",
-        "--summary-interval=1",
-        f"--dir={work_dir}",
-        magnet
-    ]
+    is_magnet = input_url.startswith("magnet:?")
+    
+    # 1. Download via aria2c (Handles both torrent magnets AND direct HTTP/HTTPS URLs with 16 connections!)
+    if is_magnet:
+        job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
+        cmd_aria = [
+            "aria2c",
+            "--seed-time=0",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--summary-interval=1",
+            f"--dir={work_dir}",
+            input_url
+        ]
+    else:
+        # Extract suggested filename from HTTP URL path
+        parsed_url = urlparse(input_url)
+        path_name = os.path.basename(unquote(parsed_url.path))
+        out_opt = [f"--out={path_name}"] if path_name else []
+        
+        job["message"] = f"📥 Step 1/3: Downloading direct file at Gigabit speed... (5%)"
+        cmd_aria = [
+            "aria2c",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--summary-interval=1",
+            f"--dir={work_dir}"
+        ] + out_opt + [input_url]
     
     try:
         proc = subprocess.Popen(
@@ -345,17 +362,17 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
         for line in proc.stdout:
             match = re.search(r'\((\d+)%\)', line)
             if match:
-                torrent_pct = int(match.group(1))
-                overall_pct = int(5 + (torrent_pct * 0.45))
+                dl_pct = int(match.group(1))
+                overall_pct = int(5 + (dl_pct * 0.45))
                 if overall_pct > last_pct:
                     last_pct = overall_pct
                     job["progress"] = overall_pct
-                    job["message"] = f"📥 Step 1/3: Downloading Torrent ({torrent_pct}% torrent | {overall_pct}% total)"
+                    job["message"] = f"📥 Step 1/3: Downloading Data ({dl_pct}% downloaded | {overall_pct}% total)"
         
         proc.wait()
         if proc.returncode != 0:
             job["status"] = "error"
-            job["error"] = "Torrent download failed on cloud server."
+            job["error"] = "Download failed on cloud server. Verify the URL is valid and accessible."
             cleanup_workspace([work_dir, converted_dir])
             return
             
@@ -366,7 +383,7 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
         return
 
     job["progress"] = 50
-    job["message"] = "✅ Step 1/3: Torrent Download Completed! (50%)"
+    job["message"] = "✅ Step 1/3: Cloud Download Completed! (50%)"
     time.sleep(0.5)
 
     # 2. Locate & Remux Video
@@ -380,7 +397,7 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
 
     if not all_videos:
         job["status"] = "error"
-        job["error"] = "No valid video stream found in the downloaded torrent."
+        job["error"] = "No valid video stream found in the downloaded file."
         cleanup_workspace([work_dir, converted_dir])
         return
 
@@ -393,7 +410,7 @@ def background_worker_task(job_id: str, magnet: str, targets: list, st_creds: tu
     
     job["filename"] = target_filename
     job["progress"] = 62
-    job["message"] = f"🎬 Step 2/3: Remuxing '{original_raw_name}' ➔ '{target_filename}' (62%)"
+    job["message"] = f"🎬 Step 2/3: Processing '{original_raw_name}' ➔ '{target_filename}' (62%)"
     
     if largest_video.endswith(".mp4"):
         shutil.copyfile(largest_video, output_mp4)
@@ -456,16 +473,15 @@ with col2:
         st.rerun()
 
 if convert_clicked:
-    clean_magnet = magnet_input.strip()
+    clean_input = link_input.strip()
     
-    if not clean_magnet:
-        st.warning("⚠️ Please paste a magnet link into the box above.")
-    elif not clean_magnet.startswith("magnet:?"):
-        st.error("⚠️ Invalid format. Magnet links must start with `magnet:?`")
+    if not clean_input:
+        st.warning("⚠️ Please paste a magnet link or direct HTTP/HTTPS video URL into the box above.")
+    elif not (clean_input.startswith("magnet:?") or clean_input.startswith("http://") or clean_input.startswith("https://")):
+        st.error("⚠️ Invalid format. Input must be a `magnet:?` link or a direct `https://` / `http://` URL.")
     elif not selected_destinations:
         st.error("⚠️ Please select at least one upload destination (Streamtape, LuluStream, or Vidara).")
     else:
-        # Check credentials for chosen destinations
         if "Streamtape" in selected_destinations and (not st_login or not st_key):
             st.error("⚠️ Please enter Streamtape Login and Key in the sidebar.")
         elif "LuluStream" in selected_destinations and not ls_key:
@@ -473,7 +489,7 @@ if convert_clicked:
         elif "Vidara.so" in selected_destinations and not vd_key:
             st.error("⚠️ Please enter your Vidara.so API Key in the sidebar.")
         else:
-            job_id = hashlib.md5(clean_magnet.encode()).hexdigest()[:10]
+            job_id = hashlib.md5(clean_input.encode()).hexdigest()[:10]
             st.session_state.current_job_id = job_id
             
             if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
@@ -492,7 +508,7 @@ if convert_clicked:
                     target=background_worker_task,
                     args=(
                         job_id,
-                        clean_magnet,
+                        clean_input,
                         selected_destinations,
                         (st_login.strip(), st_key.strip()),
                         ls_key.strip(),
@@ -549,10 +565,9 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ Supported Hosts & Configuration"):
+with st.expander("ℹ️ Supported Inputs & Video Hosts"):
     st.markdown("""
-    - **Streamtape Support:** Direct official API integration (`POST /file/ul`) with live byte tracking.
-    - **LuluStream Support:** Full REST API integration with active server discovery (`/api/upload/server`).
-    - **Vidara.so Support:** Full REST API integration (`/v1/upload/server` & direct multipart upload).
-    - **Multi-Host Mirroring:** You can select Streamtape, LuluStream, and Vidara to mirror the torrent to all 3 video hosts simultaneously in a single cloud run!
+    - **Dual Input Protocol:** Supports both BitTorrent `magnet:?` links AND direct HTTP/HTTPS download links (Seedr, Real-Debrid, Alldebrid, Web direct `.mp4`/`.mkv` URLs).
+    - **16-Stream Fast Download:** `aria2c` downloads both torrents and HTTP files with 16 parallel chunks at Gigabit datacenter speeds.
+    - **Multi-Host Mirroring:** Automatically mirrors to Streamtape, LuluStream, and Vidara.so in one go!
     """)
