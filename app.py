@@ -151,7 +151,7 @@ ls_default_key = os.environ.get("LULUSTREAM_KEY", "")
 vd_default_key = os.environ.get("VIDARA_KEY", "")
 sb_default_url = os.environ.get("SUPABASE_URL", os.environ.get("NEXT_PUBLIC_SUPABASE_URL", ""))
 sb_default_key = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")))
-sb_default_table = os.environ.get("SUPABASE_TABLE", "videos")
+sb_default_table = os.environ.get("SUPABASE_TABLE", "streams")
 
 try:
     if "STREAMTAPE_LOGIN" in st.secrets:
@@ -202,7 +202,7 @@ with st.sidebar:
     st.subheader("1. Supabase Database")
     sb_url = st.text_input("Supabase Project URL", value=sb_default_url, placeholder="https://xxxx.supabase.co")
     sb_key = st.text_input("Supabase API Key (service_role or anon)", value=sb_default_key, type="password", placeholder="eyJhbGciOi...")
-    sb_table = st.text_input("Table Name", value=sb_default_table, placeholder="videos")
+    sb_table = st.text_input("Table Name", value=sb_default_table, placeholder="streams")
     
     with st.expander("⚙️ Supabase Column Mapping"):
         col_title = st.text_input("Title Column", value="title")
@@ -251,20 +251,36 @@ if link_input.strip() != st.session_state.input_url_prev:
 
 st.markdown("### 2. 📝 Video Details (Pushed to Supabase)")
 
-# Display Auto-Detected Title in input box (Editable by user)
-col_t1, col_t2 = st.columns([2, 1])
-with col_t1:
-    user_title = st.text_input(
-        "Video Title (Auto-Detected from Link)",
-        value=st.session_state.form_title,
-        placeholder="e.g. Emilie Knows How To Take Charge (2026)",
-        help="Automatically detected from your magnet or Seedr URL. You can edit it if you want!"
-    )
-with col_t2:
-    user_tags = st.text_input("Tags (Comma-separated)", placeholder="e.g. 1080p, HD, Series")
+# 1. Full-Width Video Title
+user_title = st.text_input(
+    "Video Title (Auto-Detected from Link)",
+    value=st.session_state.form_title,
+    placeholder="e.g. Emilie Knows How To Take Charge (2026)",
+    help="Automatically detected from your magnet or Seedr URL. You can edit it if you want!"
+)
 
-user_image = st.text_input("Poster / Thumbnail Image URL", placeholder="e.g. https://example.com/posters/movie.jpg")
-user_desc = st.text_area("Video Description", placeholder="e.g. Full 1080p high-definition video release with complete scenes and audio.", height=80)
+# 2. Full-Width Poster Image URL
+user_image = st.text_input(
+    "Poster / Thumbnail Image URL",
+    placeholder="e.g. https://example.com/posters/movie.jpg",
+    help="Direct link to the video poster or thumbnail."
+)
+
+# 3. Full-Width Description
+user_desc = st.text_area(
+    "Video Description",
+    placeholder="e.g. Full 1080p high-definition video release with complete scenes and audio.",
+    height=90,
+    help="Write or paste your video description or plot summary."
+)
+
+# 4. Full-Width Tags (Placed AFTER Description for plenty of room)
+user_tags = st.text_area(
+    "Tags (Comma-separated)",
+    placeholder="e.g. 1080p, HD, Romance, Action, 2026, Series, Drama",
+    height=70,
+    help="Comma-separated keywords. You can paste long lists of tags here!"
+)
 
 # Upload Destination Selection
 available_destinations = ["Streamtape"]
@@ -595,7 +611,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             cols.get("description", "description"): meta.get("description") or "",
             cols.get("tags", "tags"): parsed_tags if parsed_tags else raw_tags,
             cols.get("image", "image"): meta.get("image") or "",
-            cols.get("video_url", "video_url"): job["streamtape_url"] # Exact /e/ player link!
+            cols.get("video_url", "video_url"): job["streamtape_url"]
         }
         
         success, sb_res = insert_to_supabase(
@@ -653,7 +669,7 @@ if convert_clicked:
                 "enabled": push_to_supabase and bool(sb_url and sb_key),
                 "url": sb_url.strip() if sb_url else "",
                 "key": sb_key.strip() if sb_key else "",
-                "table": sb_table.strip() if sb_table else "videos",
+                "table": sb_table.strip() if sb_table else "streams",
                 "cols": {
                     "title": col_title.strip() if 'col_title' in locals() else "title",
                     "description": col_desc.strip() if 'col_desc' in locals() else "description",
