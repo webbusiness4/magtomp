@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import subprocess
 import os
 import glob
@@ -544,16 +544,27 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     job["message"] = f"🎬 Step 2/3: Processing '{target_filename}' (62%)"
     
     if largest_video.endswith(".mp4"):
-        shutil.copyfile(largest_video, output_mp4)
+        shutil.move(largest_video, output_mp4)
     else:
-        cmd_ffmpeg = [
+        # 1. Try instantaneous direct stream copy (-c copy)
+        cmd_fast = [
             "ffmpeg", "-y",
             "-i", largest_video,
-            "-c:v", "copy",
-            "-c:a", "aac",
+            "-c", "copy",
             output_mp4
         ]
-        subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd_fast, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # 2. Fall back to audio transcoding only if -c copy fails
+        if res.returncode != 0:
+            cmd_fallback = [
+                "ffmpeg", "-y",
+                "-i", largest_video,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                output_mp4
+            ]
+            subprocess.run(cmd_fallback, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
     job["size_mb"] = file_size_mb
@@ -612,7 +623,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             "description": meta.get("description") or "",
             "cast_members": meta.get("tags") or "",  # Exactly saved to cast_members column!
             "is_stream": True,
-            "status": "active"
+            "status": "published"
         }
             
         success, sb_res = insert_to_supabase(
