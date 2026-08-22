@@ -9,7 +9,6 @@ import time
 import threading
 import hashlib
 import urllib.parse
-from datetime import datetime
 from urllib.parse import urlparse, unquote, urlsplit, parse_qs
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
@@ -78,15 +77,6 @@ st.markdown("""
         font-size: 0.75rem;
         font-weight: 600;
         border: 1px solid #4338ca;
-    }
-    .badge-auto {
-        background-color: #78350f;
-        color: #fde68a;
-        padding: 0.3rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        border: 1px solid #b45309;
     }
     .stButton>button {
         width: 100%;
@@ -172,7 +162,6 @@ try:
     if "VIDARA_KEY" in st.secrets:
         vd_default_key = st.secrets["VIDARA_KEY"]
         
-    # Support multiple Supabase naming conventions
     if "SUPABASE_URL" in st.secrets:
         sb_default_url = st.secrets["SUPABASE_URL"]
     elif "NEXT_PUBLIC_SUPABASE_URL" in st.secrets:
@@ -194,12 +183,11 @@ except Exception:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP ➔ Streamtape & Supabase Hub</div>
-    <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish direct player links to Supabase.</div>
+    <div class="hero-sub">Auto-convert torrents/Seedr links, upload to Streamtape, and auto-insert title & embed_url into Supabase.</div>
     <div class="badge-container">
-        <span class="badge-st">🎬 Streamtape /e/ Player Links</span>
-        <span class="badge-sb">⚡ Supabase 'streams' Ready</span>
-        <span class="badge-auto">✨ Auto Title & Slug</span>
-        <span class="badge">💻 Zero PC Bandwidth</span>
+        <span class="badge-st">🎬 Streamtape /e/ Auto-Upload</span>
+        <span class="badge-sb">⚡ Supabase 'streams' Auto-Publish</span>
+        <span class="badge">🚀 1-Click Fully Automated</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -210,21 +198,18 @@ with st.sidebar:
     
     st.subheader("1. Supabase Database ('streams' Table)")
     sb_url = st.text_input("Supabase Project URL", value=sb_default_url, placeholder="https://xxxx.supabase.co")
-    sb_key = st.text_input("Supabase API Key (service_role or anon)", value=sb_default_key, type="password", placeholder="eyJhbGciOi...")
+    sb_key = st.text_input("Supabase API Key", value=sb_default_key, type="password", placeholder="eyJhbGciOi...")
     sb_table = st.text_input("Table Name", value=sb_default_table, placeholder="streams")
     
     if sb_url and sb_key:
-        st.success("✅ Supabase Configured")
+        st.success("✅ Supabase Connected")
         
     st.markdown("---")
     st.subheader("2. Streamtape Account")
     st_login = st.text_input("Streamtape API Login", value=st_default_login, type="default")
     st_key = st.text_input("Streamtape API Key", value=st_default_key, type="password")
-    
-    st.markdown("---")
-    st.subheader("3. Secondary Hosts (Optional)")
-    ls_key = st.text_input("LuluStream API Key", value=ls_default_key, type="password")
-    vd_key = st.text_input("Vidara.so API Key", value=vd_default_key, type="password")
+    if st_login and st_key:
+        st.success("✅ Streamtape Connected")
     
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
@@ -235,12 +220,11 @@ if "input_url_prev" not in st.session_state:
 if "form_title" not in st.session_state:
     st.session_state.form_title = ""
 
-# Main Form
-st.markdown("### 1. 📥 Video Source")
+# Main Input Section
 link_input = st.text_area(
-    "Magnet Link or Direct Video URL (Seedr, Debrid, Web)",
+    "Paste Magnet Link or Direct Video URL (Seedr, Debrid, Web)",
     placeholder="Paste magnet:?xt=urn:btih:... OR https://rd22.seedr.cc/ff_get/.../video.mp4...",
-    height=90,
+    height=100,
     help="Supports both torrent magnet links AND direct HTTP/HTTPS video URLs."
 )
 
@@ -251,52 +235,20 @@ if link_input.strip() != st.session_state.input_url_prev:
     if detected:
         st.session_state.form_title = detected
 
-st.markdown("### 2. 📝 Video Details (Pushed to 'streams' Table)")
-
-# 1. Full-Width Video Title (title)
+# Auto-Detected Title (Editable if user wants to tweak it)
 user_title = st.text_input(
-    "Video Title (Auto-Detected from Link)",
+    "Video Title (Auto-Detected)",
     value=st.session_state.form_title,
-    placeholder="e.g. Emilie Knows How To Take Charge (2026)",
-    help="Automatically mapped to 'title' & auto-generates 'slug' for Supabase."
+    placeholder="Auto-detected from link (e.g. Emilie Knows How To Take Charge)",
+    help="Automatically filled from your link. Sent as 'title' and auto-generates 'slug' in Supabase."
 )
 
-# 2. Full-Width Poster Image URL (poster_url)
-user_image = st.text_input(
-    "Poster Image URL (poster_url)",
-    placeholder="e.g. https://example.com/posters/movie.jpg",
-    help="Mapped to 'poster_url' (and 'backdrop_url') in Supabase."
-)
+# Optional Extra Fields Expander (Collapsed by default for clean 1-click UX)
+with st.expander("➕ Optional Extra Fields (Poster, Description)"):
+    user_image = st.text_input("Poster Image URL (poster_url)", placeholder="https://example.com/poster.jpg")
+    user_desc = st.text_area("Video Description (description)", placeholder="Optional description...")
 
-# 3. Full-Width Description (description)
-user_desc = st.text_area(
-    "Video Description (description)",
-    placeholder="e.g. Full 1080p high-definition video release with complete scenes and audio.",
-    height=90,
-    help="Mapped to 'description' in Supabase."
-)
-
-# 4. Cast Members (cast_members)
-user_cast = st.text_input(
-    "Cast / Star Names (Optional)",
-    placeholder="e.g. Emilie, Alexis, Jean",
-    help="Mapped to 'cast_members' in Supabase."
-)
-
-# Upload Destination Selection
-available_destinations = ["Streamtape"]
-if ls_key:
-    available_destinations.append("LuluStream")
-if vd_key:
-    available_destinations.append("Vidara.so")
-
-selected_destinations = st.multiselect(
-    "Upload Video To:",
-    available_destinations,
-    default=["Streamtape"]
-)
-
-push_to_supabase = st.checkbox("⚡ Automatically insert record into Supabase 'streams' table on completion", value=True if sb_url and sb_key else False)
+push_to_supabase = st.checkbox("⚡ Auto-publish to Supabase 'streams' table on completion", value=True if sb_url and sb_key else False)
 
 def cleanup_workspace(dirs_to_clean):
     """Safely cleans up temporary download files."""
@@ -359,82 +311,7 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
     else:
         raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
 
-def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job_dict):
-    """Uploads directly to LuluStream with live MB tracking."""
-    srv_req = f"https://lulustream.com/api/upload/server?key={api_key}"
-    srv_res = requests.get(srv_req, timeout=15).json()
-    if srv_res.get("status") != 200:
-        raise Exception(f"LuluStream Server Error: {srv_res.get('msg')}")
-        
-    upload_server_url = srv_res.get("result")
-    file_size = os.path.getsize(file_path)
-    file_size_mb = round(file_size / (1024 * 1024), 2)
-
-    def on_ls_progress(monitor):
-        up_bytes = monitor.bytes_read
-        up_mb = round(up_bytes / (1024 * 1024), 2)
-        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
-        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
-        job_dict["message"] = f"🟣 Uploading to LuluStream: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
-
-    with open(file_path, "rb") as f:
-        encoder = MultipartEncoder(fields={
-            "key": api_key,
-            "api_key": api_key,
-            "file": (custom_filename, f, "video/mp4"),
-            "file_title": custom_filename
-        })
-        monitor = MultipartEncoderMonitor(encoder, on_ls_progress)
-        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
-        upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
-
-    if upload_res.get("status") == 200 and upload_res.get("files"):
-        file_code = upload_res["files"][0].get("filecode")
-        return f"https://lulustream.com/e/{file_code}"
-    else:
-        raise Exception(f"LuluStream upload failed: {upload_res}")
-
-def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dict):
-    """Uploads directly to Vidara.so with live MB tracking."""
-    srv_req = f"https://api.vidara.so/v1/upload/server?api_key={api_key}"
-    srv_res = requests.get(srv_req, timeout=15).json()
-    if srv_res.get("status") != 200 or not srv_res.get("result", {}).get("upload_server"):
-        raise Exception(f"Vidara Server Error: {srv_res.get('msg')}")
-        
-    upload_server_url = srv_res["result"]["upload_server"]
-    file_size = os.path.getsize(file_path)
-    file_size_mb = round(file_size / (1024 * 1024), 2)
-
-    def on_vd_progress(monitor):
-        up_bytes = monitor.bytes_read
-        up_mb = round(up_bytes / (1024 * 1024), 2)
-        rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
-        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
-        job_dict["message"] = f"🟢 Uploading to Vidara: {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
-
-    with open(file_path, "rb") as f:
-        encoder = MultipartEncoder(fields={
-            "key": api_key,
-            "api_key": api_key,
-            "file": (custom_filename, f, "video/mp4"),
-            "title": custom_filename,
-            "file_title": custom_filename
-        })
-        monitor = MultipartEncoderMonitor(encoder, on_vd_progress)
-        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
-        upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
-
-    if upload_res.get("filecode"):
-        return f"https://vidara.so/e/{upload_res['filecode']}"
-    elif upload_res.get("url"):
-        return upload_res["url"]
-    elif upload_res.get("result", {}).get("filecode"):
-        return f"https://vidara.so/e/{upload_res['result']['filecode']}"
-    else:
-        err_msg = upload_res.get("error") or upload_res.get("msg") or upload_res
-        raise Exception(f"Vidara error: {err_msg}")
-
-def background_worker_task(job_id: str, input_url: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str, supabase_config: dict):
+def background_worker_task(job_id: str, input_url: str, st_creds: tuple, supabase_config: dict):
     """Executes the complete pipeline in a detached background thread."""
     work_dir = f"./cloud_downloads_{job_id}"
     converted_dir = f"./converted_{job_id}"
@@ -560,40 +437,19 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     job["message"] = f"✅ Step 2/3: MP4 Ready: '{target_filename}' ({file_size_mb} MB) (70%)"
     time.sleep(0.5)
 
-    # 3. Fault-Tolerant Multi-Host Uploads
-    upload_errors = []
-    
-    # Streamtape (Returns /e/ embed player link)
-    if "Streamtape" in targets and st_creds[0] and st_creds[1]:
-        try:
-            job["progress"] = 75
-            job["message"] = f"🚀 Step 3/3: Uploading to Streamtape ({file_size_mb} MB)..."
-            st_url = upload_to_streamtape(output_mp4, target_filename, st_creds[0], st_creds[1], job)
-            job["streamtape_url"] = st_url
-        except Exception as e:
-            upload_errors.append(f"Streamtape: {str(e)}")
+    # 3. Upload to Streamtape (Returns /e/ embed player link)
+    try:
+        job["progress"] = 75
+        job["message"] = f"🚀 Step 3/3: Uploading to Streamtape ({file_size_mb} MB)..."
+        st_url = upload_to_streamtape(output_mp4, target_filename, st_creds[0], st_creds[1], job)
+        job["streamtape_url"] = st_url
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = f"Streamtape upload error: {str(e)}"
+        cleanup_workspace([work_dir, converted_dir])
+        return
 
-    # LuluStream
-    if "LuluStream" in targets and ls_key:
-        try:
-            job["progress"] = 82
-            job["message"] = f"🟣 Step 3/3: Uploading to LuluStream ({file_size_mb} MB)..."
-            ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key, job)
-            job["lulustream_url"] = ls_url
-        except Exception as e:
-            upload_errors.append(f"LuluStream: {str(e)}")
-
-    # Vidara.so
-    if "Vidara.so" in targets and vd_key:
-        try:
-            job["progress"] = 90
-            job["message"] = f"🟢 Step 3/3: Uploading to Vidara.so ({file_size_mb} MB)..."
-            vd_url = upload_to_vidara(output_mp4, target_filename, vd_key, job)
-            job["vidara_url"] = vd_url
-        except Exception as e:
-            upload_errors.append(f"Vidara.so: {str(e)}")
-
-    # 4. Insert into Supabase ('streams' Table with exact schema mapping)
+    # 4. Insert into Supabase ('streams' Table: title, slug, embed_url, is_stream, status)
     if supabase_config.get("enabled") and job.get("streamtape_url"):
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase 'streams' table..."
         
@@ -601,20 +457,19 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         final_post_title = meta.get("title") or target_filename.replace(".mp4", "")
         slug = generate_slug(final_post_title)
         
-        # Build exact 'streams' row payload matching your Supabase schema
         payload = {
             "title": final_post_title,
             "slug": slug,
-            "description": meta.get("description") or "",
-            "poster_url": meta.get("image") or "",
-            "backdrop_url": meta.get("image") or "",
             "embed_url": job["streamtape_url"], # https://streamtape.com/e/XXXXX/
             "is_stream": True,
             "status": "active"
         }
         
-        if meta.get("cast"):
-            payload["cast_members"] = meta["cast"]
+        if meta.get("image"):
+            payload["poster_url"] = meta["image"]
+            payload["backdrop_url"] = meta["image"]
+        if meta.get("description"):
+            payload["description"] = meta["description"]
             
         success, sb_res = insert_to_supabase(
             supabase_config["url"],
@@ -623,27 +478,19 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             payload
         )
         if success:
-            job["supabase_status"] = f"✅ Successfully published '{final_post_title}' to Supabase (Slug: {slug})!"
+            job["supabase_status"] = f"✅ Successfully published '{final_post_title}' to Supabase (embed_url: {job['streamtape_url']})!"
         else:
             job["supabase_status"] = f"⚠️ Supabase Warning: {sb_res}"
 
     job["progress"] = 100
-    
-    if job.get("streamtape_url") or job.get("lulustream_url") or job.get("vidara_url"):
-        job["status"] = "completed"
-        if upload_errors:
-            job["error"] = " | ".join(upload_errors)
-        job["message"] = f"🎉 Successfully mirrored '{target_filename}' ({file_size_mb} MB)!"
-    else:
-        job["status"] = "error"
-        job["error"] = " | ".join(upload_errors) if upload_errors else "All destination uploads failed."
-        
+    job["status"] = "completed"
+    job["message"] = f"🎉 Successfully mirrored '{target_filename}' ({file_size_mb} MB)!"
     cleanup_workspace([work_dir, converted_dir])
 
 # Action Trigger Buttons
 col1, col2 = st.columns([4, 1])
 with col1:
-    convert_clicked = st.button("🚀 Convert, Upload & Publish to Supabase")
+    convert_clicked = st.button("🚀 Convert, Upload to Streamtape & Auto-Publish to Supabase")
 with col2:
     if st.button("Clear / Reset"):
         st.session_state.current_job_id = None
@@ -658,61 +505,52 @@ if convert_clicked:
         st.warning("⚠️ Please paste a magnet link or direct video URL above.")
     elif not (clean_input.startswith("magnet:?") or clean_input.startswith("http://") or clean_input.startswith("https://")):
         st.error("⚠️ Invalid format. Input must be a `magnet:?` link or direct `https://` / `http://` URL.")
-    elif not selected_destinations:
-        st.error("⚠️ Please select at least one upload destination.")
+    elif not st_login or not st_key:
+        st.error("⚠️ Please enter Streamtape Login and Key in the sidebar or Secrets.")
     else:
-        if "Streamtape" in selected_destinations and (not st_login or not st_key):
-            st.error("⚠️ Please enter Streamtape Login and Key in the sidebar.")
-        else:
-            job_id = hashlib.md5(clean_input.encode()).hexdigest()[:10]
-            st.session_state.current_job_id = job_id
-            
-            sb_config = {
-                "enabled": push_to_supabase and bool(sb_url and sb_key),
-                "url": sb_url.strip() if sb_url else "",
-                "key": sb_key.strip() if sb_key else "",
-                "table": sb_table.strip() if sb_table else "streams"
+        job_id = hashlib.md5(clean_input.encode()).hexdigest()[:10]
+        st.session_state.current_job_id = job_id
+        
+        sb_config = {
+            "enabled": push_to_supabase and bool(sb_url and sb_key),
+            "url": sb_url.strip() if sb_url else "",
+            "key": sb_key.strip() if sb_key else "",
+            "table": sb_table.strip() if sb_table else "streams"
+        }
+        
+        final_title = user_title.strip() if user_title.strip() else extract_auto_title(clean_input)
+        
+        user_meta = {
+            "title": final_title,
+            "description": user_desc.strip() if 'user_desc' in locals() else "",
+            "image": user_image.strip() if 'user_image' in locals() else ""
+        }
+        
+        if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
+            GLOBAL_STORAGE[job_id] = {
+                "status": "starting",
+                "progress": 0,
+                "message": "⚡ Starting background cloud task...",
+                "filename": "",
+                "size_mb": 0,
+                "streamtape_url": "",
+                "supabase_status": "",
+                "user_meta": user_meta,
+                "error": ""
             }
+            thread = threading.Thread(
+                target=background_worker_task,
+                args=(
+                    job_id,
+                    clean_input,
+                    (st_login.strip(), st_key.strip()),
+                    sb_config
+                ),
+                daemon=True
+            )
+            thread.start()
             
-            final_title = user_title.strip() if user_title.strip() else extract_auto_title(clean_input)
-            
-            user_meta = {
-                "title": final_title,
-                "description": user_desc.strip(),
-                "image": user_image.strip(),
-                "cast": user_cast.strip() if 'user_cast' in locals() else ""
-            }
-            
-            if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
-                GLOBAL_STORAGE[job_id] = {
-                    "status": "starting",
-                    "progress": 0,
-                    "message": "⚡ Starting background cloud task...",
-                    "filename": "",
-                    "size_mb": 0,
-                    "streamtape_url": "",
-                    "lulustream_url": "",
-                    "vidara_url": "",
-                    "supabase_status": "",
-                    "user_meta": user_meta,
-                    "error": ""
-                }
-                thread = threading.Thread(
-                    target=background_worker_task,
-                    args=(
-                        job_id,
-                        clean_input,
-                        selected_destinations,
-                        (st_login.strip(), st_key.strip()),
-                        ls_key.strip() if ls_key else "",
-                        vd_key.strip() if vd_key else "",
-                        sb_config
-                    ),
-                    daemon=True
-                )
-                thread.start()
-                
-            st.rerun()
+        st.rerun()
 
 # Real-Time Live Job Monitor
 if "current_job_id" in st.session_state and st.session_state.current_job_id:
@@ -733,7 +571,7 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
             
         elif job["status"] == "completed":
             st.balloons()
-            st.success(f"🎉 **Video Processed & Published Successfully!**")
+            st.success(f"🎉 **Video Processed & Published to Supabase!**")
             
             meta = job.get("user_meta", {})
             st.markdown(f"**Title:** `{meta.get('title') or job['filename']}` | **Size:** `{job['size_mb']} MB`")
@@ -746,38 +584,16 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
             
             # Streamtape Card
             if job.get("streamtape_url"):
-                st.markdown("#### 🚀 Streamtape Player Link (`embed_url`):")
+                st.markdown("#### 🚀 Streamtape Direct Player URL (`embed_url`):")
                 st.code(job["streamtape_url"], language="text")
                 st.markdown(f"👉 [**▶️ Open Streamtape Player**]({job['streamtape_url']})")
                 
-            # LuluStream Card
-            if job.get("lulustream_url"):
-                st.markdown("#### 🟣 LuluStream Direct Player Link:")
-                st.code(job["lulustream_url"], language="text")
-                st.markdown(f"👉 [**▶️ Open LuluStream Player**]({job['lulustream_url']})")
-
-            # Vidara Card
-            if job.get("vidara_url"):
-                st.markdown("#### 🟢 Vidara.so Direct Player Link:")
-                st.code(job["vidara_url"], language="text")
-                st.markdown(f"👉 [**▶️ Open Vidara Player**]({job['vidara_url']})")
-                
-            # Display Image Preview if user provided
-            if meta.get("image"):
-                st.markdown("#### 🖼️ Poster Preview (`poster_url`):")
-                st.image(meta["image"], width=300)
-                
-            if job.get("error"):
-                st.warning(f"⚠️ Note: {job['error']}")
-            
         elif job["status"] == "error":
             st.error(f"❌ Error: {job.get('error', 'Unknown cloud processing error')}")
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
+with st.expander("ℹ️ How Automated Publishing Works"):
     st.markdown("""
-    - **✨ Automatic Title & Slug:** The app auto-extracts the title from magnet/Seedr links and generates the clean `slug` required by your Supabase table.
-    - **Exact 'streams' Mapping:** Maps `embed_url`, `poster_url`, `backdrop_url`, `title`, `slug`, `description`, `is_stream=True`, and `status='active'`.
-    - **Streamtape Player Link (`/e/`):** Formats Streamtape uploads into `https://streamtape.com/e/Je0ZqOama0cjj89/` for instant playback.
+    - **1-Click Automatic Pipeline:** Paste your link and click Convert. The app extracts the `title`, generates the `slug`, uploads to Streamtape, and inserts `title`, `slug`, and `embed_url` directly into your Supabase `streams` table!
     """)
