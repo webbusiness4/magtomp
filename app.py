@@ -251,37 +251,37 @@ if link_input.strip() != st.session_state.input_url_prev:
     if detected:
         st.session_state.form_title = detected
 
-st.markdown("### 2. 📝 Video Details (Pushed to Supabase)")
+st.markdown("### 2. 📝 Video Details (Pushed to Supabase 'streams')")
 
-# 1. Full-Width Video Title
+# 1. Full-Width Video Title (title & slug)
 user_title = st.text_input(
     "Video Title (Auto-Detected from Link)",
     value=st.session_state.form_title,
     placeholder="e.g. Emilie Knows How To Take Charge (2026)",
-    help="Automatically detected from your magnet or Seedr URL. You can edit it if you want!"
+    help="Automatically detected from your magnet or Seedr URL. Mapped to 'title' and generates 'slug'."
 )
 
-# 2. Full-Width Poster Image URL
+# 2. Full-Width Poster Image URL (poster_url & backdrop_url)
 user_image = st.text_input(
     "Poster Image URL (poster_url)",
     placeholder="e.g. https://example.com/posters/movie.jpg",
-    help="Direct link to the video poster or thumbnail."
+    help="Direct link to the video poster. Mapped to 'poster_url' and 'backdrop_url'."
 )
 
-# 3. Full-Width Description
+# 3. Full-Width Description (description)
 user_desc = st.text_area(
     "Video Description (description)",
     placeholder="e.g. Full 1080p high-definition video release with complete scenes and audio.",
     height=90,
-    help="Write or paste your video description or plot summary."
+    help="Mapped to 'description' column in Supabase."
 )
 
-# 4. Full-Width Tags (Placed AFTER Description for plenty of room)
+# 4. Full-Width Tags (Mapped to cast_members column in Supabase)
 user_tags = st.text_area(
-    "Tags (Comma-separated)",
-    placeholder="e.g. 1080p, HD, Romance, Action, 2026, Series, Drama",
+    "Tags (Comma-separated ➔ Saved to 'cast_members')",
+    placeholder="e.g. AssParade, 26, 08, 17, Lucky, Kay, XXX, 1080p",
     height=70,
-    help="Comma-separated keywords. You can paste long lists of tags here!"
+    help="Comma-separated keywords/tags. Directly saved into your 'cast_members' column in Supabase!"
 )
 
 # Upload Destination Selection
@@ -594,7 +594,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         except Exception as e:
             upload_errors.append(f"Vidara.so: {str(e)}")
 
-    # 4. Insert into Supabase ('streams' Table: title, slug, embed_url, poster_url, description, is_stream, status)
+    # 4. Insert into Supabase ('streams' Table)
     if supabase_config.get("enabled") and job.get("streamtape_url"):
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase 'streams' table..."
         
@@ -602,19 +602,18 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         final_post_title = meta.get("title") or target_filename.replace(".mp4", "")
         slug = generate_slug(final_post_title)
         
+        # Build exact 'streams' row payload
         payload = {
             "title": final_post_title,
             "slug": slug,
             "embed_url": job["streamtape_url"], # https://streamtape.com/e/XXXXX/
+            "poster_url": meta.get("image") or "",
+            "backdrop_url": meta.get("image") or "",
+            "description": meta.get("description") or "",
+            "cast_members": meta.get("tags") or "",  # Exactly saved to cast_members column!
             "is_stream": True,
             "status": "active"
         }
-        
-        if meta.get("image"):
-            payload["poster_url"] = meta["image"]
-            payload["backdrop_url"] = meta["image"]
-        if meta.get("description"):
-            payload["description"] = meta["description"]
             
         success, sb_res = insert_to_supabase(
             supabase_config["url"],
@@ -623,7 +622,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             payload
         )
         if success:
-            job["supabase_status"] = f"✅ Successfully published '{final_post_title}' to Supabase (embed_url: {job['streamtape_url']})!"
+            job["supabase_status"] = f"✅ Successfully published '{final_post_title}' to Supabase (Slug: {slug})!"
         else:
             job["supabase_status"] = f"⚠️ Supabase Warning: {sb_res}"
 
@@ -678,9 +677,9 @@ if convert_clicked:
             
             user_meta = {
                 "title": final_title,
-                "description": user_desc.strip() if 'user_desc' in locals() else "",
-                "image": user_image.strip() if 'user_image' in locals() else "",
-                "tags": user_tags.strip() if 'user_tags' in locals() else ""
+                "description": user_desc.strip(),
+                "image": user_image.strip(),
+                "tags": user_tags.strip() # Saved to cast_members
             }
             
             if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
@@ -778,6 +777,6 @@ st.markdown("---")
 with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
     st.markdown("""
     - **✨ Automatic Title & Slug:** The app auto-extracts the title from magnet/Seedr links and generates the clean `slug` required by your Supabase table.
-    - **Exact 'streams' Mapping:** Maps `embed_url`, `poster_url`, `backdrop_url`, `title`, `slug`, `description`, `is_stream=True`, and `status='active'`.
+    - **Tags ➔ 'cast_members':** Whatever tags/keywords you enter in the Tags box are automatically saved into your Supabase `cast_members` column.
     - **Streamtape Player Link (`/e/`):** Formats Streamtape uploads into `https://streamtape.com/e/Je0ZqOama0cjj89/` for instant playback.
     """)
