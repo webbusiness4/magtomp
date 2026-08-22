@@ -8,7 +8,8 @@ import re
 import time
 import threading
 import hashlib
-from urllib.parse import urlparse, unquote
+import urllib.parse
+from urllib.parse import urlparse, unquote, urlsplit, parse_qs
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 # Page Configuration
@@ -77,6 +78,15 @@ st.markdown("""
         font-weight: 600;
         border: 1px solid #4338ca;
     }
+    .badge-auto {
+        background-color: #78350f;
+        color: #fde68a;
+        padding: 0.3rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border: 1px solid #b45309;
+    }
     .stButton>button {
         width: 100%;
         border-radius: 12px;
@@ -93,13 +103,6 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6);
     }
-    .preview-card {
-        background-color: #131d31;
-        border: 1px solid #1e293b;
-        border-radius: 16px;
-        padding: 1.5rem;
-        margin-top: 1.5rem;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -109,6 +112,37 @@ def get_global_job_storage():
     return {}
 
 GLOBAL_STORAGE = get_global_job_storage()
+
+def extract_auto_title(url: str) -> str:
+    """Extracts and cleans the original video title automatically from magnet or direct HTTP URL."""
+    if not url:
+        return ""
+    url = url.strip()
+    
+    # 1. Magnet Links (Extract 'dn' display name)
+    if url.startswith("magnet:?"):
+        try:
+            qs = parse_qs(urlsplit(url).query)
+            dn = qs.get("dn", [""])[0]
+            if dn:
+                raw_name = unquote(dn)
+                base, _ = os.path.splitext(raw_name)
+                return base.replace(".", " ").replace("_", " ").strip()
+        except Exception:
+            pass
+            
+    # 2. Direct HTTP / Seedr / Debrid / Web URLs
+    elif url.startswith(("http://", "https://")):
+        try:
+            path = urlsplit(url).path
+            filename = os.path.basename(unquote(path))
+            if filename:
+                base, _ = os.path.splitext(filename)
+                return base.replace(".", " ").replace("_", " ").strip()
+        except Exception:
+            pass
+            
+    return ""
 
 # Retrieve Default Secrets
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
@@ -143,9 +177,9 @@ st.markdown("""
     <div class="hero-title">⚡ MagToMP ➔ Streamtape & Supabase Hub</div>
     <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish metadata directly to your Supabase database.</div>
     <div class="badge-container">
+        <span class="badge-auto">✨ Auto Title Detection</span>
         <span class="badge-sb">⚡ Direct Supabase Push</span>
         <span class="badge-st">🚀 Streamtape Direct</span>
-        <span class="badge">📝 Manual Metadata Form</span>
         <span class="badge">💻 Zero PC Bandwidth</span>
     </div>
 </div>
@@ -183,19 +217,39 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("Created with ❤️ by **[webbusiness4](https://github.com/webbusiness4/magtomp)**")
 
+# Initialize Form Session State for Auto-Title
+if "input_url_prev" not in st.session_state:
+    st.session_state.input_url_prev = ""
+if "form_title" not in st.session_state:
+    st.session_state.form_title = ""
+
 # Main Form
 st.markdown("### 1. 📥 Video Source")
 link_input = st.text_area(
     "Magnet Link or Direct Video URL (Seedr, Debrid, Web)",
-    placeholder="magnet:?xt=urn:btih:... OR https://rd22.seedr.cc/ff_get/.../video.mp4...",
+    placeholder="Paste magnet:?xt=urn:btih:... OR https://rd22.seedr.cc/ff_get/.../video.mp4...",
     height=90,
-    help="Paste any torrent magnet link or direct HTTP video URL."
+    help="Supports both torrent magnet links AND direct HTTP/HTTPS video URLs."
 )
 
-st.markdown("### 2. 📝 Manual Video Details (Pushed to Supabase)")
+# Detect if URL changed to auto-extract title
+if link_input.strip() != st.session_state.input_url_prev:
+    st.session_state.input_url_prev = link_input.strip()
+    detected = extract_auto_title(link_input.strip())
+    if detected:
+        st.session_state.form_title = detected
+
+st.markdown("### 2. 📝 Video Details (Pushed to Supabase)")
+
+# Display Auto-Detected Title in input box (Editable by user)
 col_t1, col_t2 = st.columns([2, 1])
 with col_t1:
-    user_title = st.text_input("Video Title", placeholder="e.g. Emilie Knows How To Take Charge (2026)")
+    user_title = st.text_input(
+        "Video Title (Auto-Detected from Link)",
+        value=st.session_state.form_title,
+        placeholder="e.g. Emilie Knows How To Take Charge (2026)",
+        help="Automatically detected from your magnet or Seedr URL. You can edit it if you want!"
+    )
 with col_t2:
     user_tags = st.text_input("Tags (Comma-separated)", placeholder="e.g. 1080p, HD, Series")
 
@@ -365,7 +419,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     
     is_magnet = input_url.startswith("magnet:?")
     
-    # 1. Download via aria2c (16 parallel connections)
+    # 1. Download via aria2c
     if is_magnet:
         job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
         cmd_aria = [
@@ -514,16 +568,16 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     if supabase_config.get("enabled") and job.get("streamtape_url"):
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase Database..."
         
-        # Prepare payload matching user columns
         cols = supabase_config.get("cols", {})
         meta = job.get("user_meta", {})
         
-        # Process tags (list or string)
         raw_tags = meta.get("tags", "")
         parsed_tags = [t.strip() for t in raw_tags.split(",") if t.strip()] if raw_tags else []
         
+        final_post_title = meta.get("title") or target_filename.replace(".mp4", "")
+        
         payload = {
-            cols.get("title", "title"): meta.get("title") or target_filename,
+            cols.get("title", "title"): final_post_title,
             cols.get("description", "description"): meta.get("description") or "",
             cols.get("tags", "tags"): parsed_tags if parsed_tags else raw_tags,
             cols.get("image", "image"): meta.get("image") or "",
@@ -561,6 +615,8 @@ with col1:
 with col2:
     if st.button("Clear / Reset"):
         st.session_state.current_job_id = None
+        st.session_state.form_title = ""
+        st.session_state.input_url_prev = ""
         st.rerun()
 
 if convert_clicked:
@@ -593,8 +649,11 @@ if convert_clicked:
                 }
             }
             
+            # If user left title blank, auto-extract it
+            final_title = user_title.strip() if user_title.strip() else extract_auto_title(clean_input)
+            
             user_meta = {
-                "title": user_title.strip(),
+                "title": final_title,
                 "description": user_desc.strip(),
                 "tags": user_tags.strip(),
                 "image": user_image.strip()
@@ -692,10 +751,8 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
 
 # Footer / Instructions
 st.markdown("---")
-with st.expander("ℹ️ How To Configure Supabase Direct Publishing"):
+with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
     st.markdown("""
-    1. In the sidebar on the left, enter your **Supabase Project URL** (e.g. `https://xyz.supabase.co`) and **API Key** (`service_role` or `anon`).
-    2. Set your **Table Name** (e.g. `videos`).
-    3. Fill in your manual **Title**, **Description**, **Tags**, and **Poster Image URL** in the form.
-    4. When you click **Convert, Upload & Publish**, MagToMP uploads the video to Streamtape, gets the direct link, and automatically inserts the full row into your Supabase database table so it appears on your Vercel website immediately!
+    - **✨ Automatic Title Extraction:** The moment you paste a magnet or Seedr/direct video link, the app extracts and cleans the original title and pre-fills the Video Title box for you. You can keep it or edit it!
+    - **Supabase Auto-Insert:** After uploading to Streamtape, the record with your title, tags, description, poster image, and direct video URL is inserted into your Supabase table automatically.
     """)
