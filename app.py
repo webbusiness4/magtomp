@@ -119,7 +119,7 @@ def extract_auto_title(url: str) -> str:
         return ""
     url = url.strip()
     
-    # 1. Magnet Links (Extract 'dn' display name)
+    # 1. Magnet Links
     if url.startswith("magnet:?"):
         try:
             qs = parse_qs(urlsplit(url).query)
@@ -131,7 +131,7 @@ def extract_auto_title(url: str) -> str:
         except Exception:
             pass
             
-    # 2. Direct HTTP / Seedr / Debrid / Web URLs
+    # 2. Direct HTTP / Seedr URLs
     elif url.startswith(("http://", "https://")):
         try:
             path = urlsplit(url).path
@@ -144,13 +144,13 @@ def extract_auto_title(url: str) -> str:
             
     return ""
 
-# Retrieve Default Secrets
+# Retrieve Default Secrets & Aliases
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
 ls_default_key = os.environ.get("LULUSTREAM_KEY", "")
 vd_default_key = os.environ.get("VIDARA_KEY", "")
-sb_default_url = os.environ.get("SUPABASE_URL", "")
-sb_default_key = os.environ.get("SUPABASE_KEY", "")
+sb_default_url = os.environ.get("SUPABASE_URL", os.environ.get("NEXT_PUBLIC_SUPABASE_URL", ""))
+sb_default_key = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")))
 sb_default_table = os.environ.get("SUPABASE_TABLE", "videos")
 
 try:
@@ -162,10 +162,20 @@ try:
         ls_default_key = st.secrets["LULUSTREAM_KEY"]
     if "VIDARA_KEY" in st.secrets:
         vd_default_key = st.secrets["VIDARA_KEY"]
+        
+    # Support multiple Supabase naming conventions
     if "SUPABASE_URL" in st.secrets:
         sb_default_url = st.secrets["SUPABASE_URL"]
+    elif "NEXT_PUBLIC_SUPABASE_URL" in st.secrets:
+        sb_default_url = st.secrets["NEXT_PUBLIC_SUPABASE_URL"]
+
     if "SUPABASE_KEY" in st.secrets:
         sb_default_key = st.secrets["SUPABASE_KEY"]
+    elif "SUPABASE_SERVICE_ROLE_KEY" in st.secrets:
+        sb_default_key = st.secrets["SUPABASE_SERVICE_ROLE_KEY"]
+    elif "NEXT_PUBLIC_SUPABASE_ANON_KEY" in st.secrets:
+        sb_default_key = st.secrets["NEXT_PUBLIC_SUPABASE_ANON_KEY"]
+        
     if "SUPABASE_TABLE" in st.secrets:
         sb_default_table = st.secrets["SUPABASE_TABLE"]
 except Exception:
@@ -649,7 +659,6 @@ if convert_clicked:
                 }
             }
             
-            # If user left title blank, auto-extract it
             final_title = user_title.strip() if user_title.strip() else extract_auto_title(clean_input)
             
             user_meta = {
