@@ -9,6 +9,7 @@ import time
 import threading
 import hashlib
 import urllib.parse
+from datetime import datetime
 from urllib.parse import urlparse, unquote, urlsplit, parse_qs
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
@@ -113,6 +114,14 @@ def get_global_job_storage():
 
 GLOBAL_STORAGE = get_global_job_storage()
 
+def generate_slug(title: str) -> str:
+    """Generates a clean URL slug from title."""
+    s = re.sub(r'[^a-zA-Z0-9\s-]', '', title.lower()).strip()
+    s = re.sub(r'[\s-]+', '-', s)
+    if not s:
+        s = f"stream-{int(time.time())}"
+    return s
+
 def extract_auto_title(url: str) -> str:
     """Extracts and cleans the original video title automatically from magnet or direct HTTP URL."""
     if not url:
@@ -188,8 +197,8 @@ st.markdown("""
     <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish direct player links to Supabase.</div>
     <div class="badge-container">
         <span class="badge-st">🎬 Streamtape /e/ Player Links</span>
-        <span class="badge-sb">⚡ Direct Supabase Push</span>
-        <span class="badge-auto">✨ Auto Title Detection</span>
+        <span class="badge-sb">⚡ Supabase 'streams' Ready</span>
+        <span class="badge-auto">✨ Auto Title & Slug</span>
         <span class="badge">💻 Zero PC Bandwidth</span>
     </div>
 </div>
@@ -199,18 +208,11 @@ st.markdown("""
 with st.sidebar:
     st.header("⚡ Database & Account Settings")
     
-    st.subheader("1. Supabase Database")
+    st.subheader("1. Supabase Database ('streams' Table)")
     sb_url = st.text_input("Supabase Project URL", value=sb_default_url, placeholder="https://xxxx.supabase.co")
     sb_key = st.text_input("Supabase API Key (service_role or anon)", value=sb_default_key, type="password", placeholder="eyJhbGciOi...")
     sb_table = st.text_input("Table Name", value=sb_default_table, placeholder="streams")
     
-    with st.expander("⚙️ Supabase Column Mapping"):
-        col_title = st.text_input("Title Column", value="title")
-        col_desc = st.text_input("Description Column", value="description")
-        col_tags = st.text_input("Tags Column", value="tags")
-        col_image = st.text_input("Image / Poster Column", value="image")
-        col_video = st.text_input("Video URL Column", value="video_url")
-        
     if sb_url and sb_key:
         st.success("✅ Supabase Configured")
         
@@ -249,37 +251,36 @@ if link_input.strip() != st.session_state.input_url_prev:
     if detected:
         st.session_state.form_title = detected
 
-st.markdown("### 2. 📝 Video Details (Pushed to Supabase)")
+st.markdown("### 2. 📝 Video Details (Pushed to 'streams' Table)")
 
-# 1. Full-Width Video Title
+# 1. Full-Width Video Title (title)
 user_title = st.text_input(
     "Video Title (Auto-Detected from Link)",
     value=st.session_state.form_title,
     placeholder="e.g. Emilie Knows How To Take Charge (2026)",
-    help="Automatically detected from your magnet or Seedr URL. You can edit it if you want!"
+    help="Automatically mapped to 'title' & auto-generates 'slug' for Supabase."
 )
 
-# 2. Full-Width Poster Image URL
+# 2. Full-Width Poster Image URL (poster_url)
 user_image = st.text_input(
-    "Poster / Thumbnail Image URL",
+    "Poster Image URL (poster_url)",
     placeholder="e.g. https://example.com/posters/movie.jpg",
-    help="Direct link to the video poster or thumbnail."
+    help="Mapped to 'poster_url' (and 'backdrop_url') in Supabase."
 )
 
-# 3. Full-Width Description
+# 3. Full-Width Description (description)
 user_desc = st.text_area(
-    "Video Description",
+    "Video Description (description)",
     placeholder="e.g. Full 1080p high-definition video release with complete scenes and audio.",
     height=90,
-    help="Write or paste your video description or plot summary."
+    help="Mapped to 'description' in Supabase."
 )
 
-# 4. Full-Width Tags (Placed AFTER Description for plenty of room)
-user_tags = st.text_area(
-    "Tags (Comma-separated)",
-    placeholder="e.g. 1080p, HD, Romance, Action, 2026, Series, Drama",
-    height=70,
-    help="Comma-separated keywords. You can paste long lists of tags here!"
+# 4. Cast Members (cast_members)
+user_cast = st.text_input(
+    "Cast / Star Names (Optional)",
+    placeholder="e.g. Emilie, Alexis, Jean",
+    help="Mapped to 'cast_members' in Supabase."
 )
 
 # Upload Destination Selection
@@ -295,7 +296,7 @@ selected_destinations = st.multiselect(
     default=["Streamtape"]
 )
 
-push_to_supabase = st.checkbox("⚡ Automatically insert record into Supabase Database on completion", value=True if sb_url and sb_key else False)
+push_to_supabase = st.checkbox("⚡ Automatically insert record into Supabase 'streams' table on completion", value=True if sb_url and sb_key else False)
 
 def cleanup_workspace(dirs_to_clean):
     """Safely cleans up temporary download files."""
@@ -350,7 +351,6 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
 
     if upload_res.get("status") == 200:
         raw_url = upload_res["result"]["url"]
-        # Format into clean direct embed player URL: https://streamtape.com/e/{filecode}/
         match = re.search(r'/v/([a-zA-Z0-9_-]+)', raw_url)
         if match:
             filecode = match.group(1)
@@ -530,7 +530,6 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     largest_video = max(all_videos, key=os.path.getsize)
     original_raw_name = os.path.basename(largest_video)
     
-    # Priority for title: User custom title if provided, otherwise parsed torrent title
     if job.get("user_meta", {}).get("title"):
         clean_user_title = job["user_meta"]["title"].strip()
         target_filename = f"{clean_user_title}.mp4"
@@ -594,26 +593,29 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         except Exception as e:
             upload_errors.append(f"Vidara.so: {str(e)}")
 
-    # 4. Insert into Supabase (Saves the /e/ direct player URL)
+    # 4. Insert into Supabase ('streams' Table with exact schema mapping)
     if supabase_config.get("enabled") and job.get("streamtape_url"):
-        job["message"] = "⚡ Step 4/4: Inserting video record into Supabase Database..."
+        job["message"] = "⚡ Step 4/4: Inserting video record into Supabase 'streams' table..."
         
-        cols = supabase_config.get("cols", {})
         meta = job.get("user_meta", {})
-        
-        raw_tags = meta.get("tags", "")
-        parsed_tags = [t.strip() for t in raw_tags.split(",") if t.strip()] if raw_tags else []
-        
         final_post_title = meta.get("title") or target_filename.replace(".mp4", "")
+        slug = generate_slug(final_post_title)
         
+        # Build exact 'streams' row payload matching your Supabase schema
         payload = {
-            cols.get("title", "title"): final_post_title,
-            cols.get("description", "description"): meta.get("description") or "",
-            cols.get("tags", "tags"): parsed_tags if parsed_tags else raw_tags,
-            cols.get("image", "image"): meta.get("image") or "",
-            cols.get("video_url", "video_url"): job["streamtape_url"]
+            "title": final_post_title,
+            "slug": slug,
+            "description": meta.get("description") or "",
+            "poster_url": meta.get("image") or "",
+            "backdrop_url": meta.get("image") or "",
+            "embed_url": job["streamtape_url"], # https://streamtape.com/e/XXXXX/
+            "is_stream": True,
+            "status": "active"
         }
         
+        if meta.get("cast"):
+            payload["cast_members"] = meta["cast"]
+            
         success, sb_res = insert_to_supabase(
             supabase_config["url"],
             supabase_config["key"],
@@ -621,7 +623,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             payload
         )
         if success:
-            job["supabase_status"] = "✅ Successfully inserted record into Supabase Database!"
+            job["supabase_status"] = f"✅ Successfully published '{final_post_title}' to Supabase (Slug: {slug})!"
         else:
             job["supabase_status"] = f"⚠️ Supabase Warning: {sb_res}"
 
@@ -669,14 +671,7 @@ if convert_clicked:
                 "enabled": push_to_supabase and bool(sb_url and sb_key),
                 "url": sb_url.strip() if sb_url else "",
                 "key": sb_key.strip() if sb_key else "",
-                "table": sb_table.strip() if sb_table else "streams",
-                "cols": {
-                    "title": col_title.strip() if 'col_title' in locals() else "title",
-                    "description": col_desc.strip() if 'col_desc' in locals() else "description",
-                    "tags": col_tags.strip() if 'col_tags' in locals() else "tags",
-                    "image": col_image.strip() if 'col_image' in locals() else "image",
-                    "video_url": col_video.strip() if 'col_video' in locals() else "video_url"
-                }
+                "table": sb_table.strip() if sb_table else "streams"
             }
             
             final_title = user_title.strip() if user_title.strip() else extract_auto_title(clean_input)
@@ -684,8 +679,8 @@ if convert_clicked:
             user_meta = {
                 "title": final_title,
                 "description": user_desc.strip(),
-                "tags": user_tags.strip(),
-                "image": user_image.strip()
+                "image": user_image.strip(),
+                "cast": user_cast.strip() if 'user_cast' in locals() else ""
             }
             
             if job_id not in GLOBAL_STORAGE or GLOBAL_STORAGE[job_id].get("status") in ["error", "completed"]:
@@ -745,13 +740,13 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
             
             if job.get("supabase_status"):
                 if "Successfully" in job["supabase_status"]:
-                    st.success(f"⚡ **Supabase Database:** {job['supabase_status']}")
+                    st.success(f"⚡ **Supabase 'streams':** {job['supabase_status']}")
                 else:
                     st.warning(f"{job['supabase_status']}")
             
             # Streamtape Card
             if job.get("streamtape_url"):
-                st.markdown("#### 🚀 Streamtape Direct Player URL (`/e/`):")
+                st.markdown("#### 🚀 Streamtape Player Link (`embed_url`):")
                 st.code(job["streamtape_url"], language="text")
                 st.markdown(f"👉 [**▶️ Open Streamtape Player**]({job['streamtape_url']})")
                 
@@ -769,7 +764,7 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
                 
             # Display Image Preview if user provided
             if meta.get("image"):
-                st.markdown("#### 🖼️ Poster Preview:")
+                st.markdown("#### 🖼️ Poster Preview (`poster_url`):")
                 st.image(meta["image"], width=300)
                 
             if job.get("error"):
@@ -782,7 +777,7 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
 st.markdown("---")
 with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
     st.markdown("""
-    - **✨ Automatic Title Extraction:** The moment you paste a magnet or Seedr/direct video link, the app extracts and cleans the original title and pre-fills the Video Title box for you. You can keep it or edit it!
-    - **Streamtape Player Link (`/e/`):** Streamtape video uploads are automatically formatted to direct player links (e.g. `https://streamtape.com/e/Je0ZqOama0cjj89/`) so your Next.js/Vercel video player can load them directly.
-    - **Supabase Auto-Insert:** The record with your title, tags, description, poster image, and `/e/` video URL is inserted into your Supabase table automatically.
+    - **✨ Automatic Title & Slug:** The app auto-extracts the title from magnet/Seedr links and generates the clean `slug` required by your Supabase table.
+    - **Exact 'streams' Mapping:** Maps `embed_url`, `poster_url`, `backdrop_url`, `title`, `slug`, `description`, `is_stream=True`, and `status='active'`.
+    - **Streamtape Player Link (`/e/`):** Formats Streamtape uploads into `https://streamtape.com/e/Je0ZqOama0cjj89/` for instant playback.
     """)
