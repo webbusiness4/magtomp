@@ -261,11 +261,11 @@ user_title = st.text_input(
     help="Automatically detected from your magnet or Seedr URL. Mapped to 'title' and generates 'slug'."
 )
 
-# 2. Full-Width Poster Image URL (poster_url & backdrop_url)
+# 2. Full-Width Poster Image URL (poster_url)
 user_image = st.text_input(
     "Poster Image URL (poster_url)",
     placeholder="e.g. https://example.com/posters/movie.jpg",
-    help="Direct link to the video poster. Mapped to 'poster_url' and 'backdrop_url'."
+    help="Direct link to the video poster image. (backdrop_url remains empty)."
 )
 
 # 3. Full-Width Description (description)
@@ -594,7 +594,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         except Exception as e:
             upload_errors.append(f"Vidara.so: {str(e)}")
 
-    # 4. Insert into Supabase ('streams' Table)
+    # 4. Insert into Supabase ('streams' Table: backdrop_url kept empty)
     if supabase_config.get("enabled") and job.get("streamtape_url"):
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase 'streams' table..."
         
@@ -602,13 +602,13 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         final_post_title = meta.get("title") or target_filename.replace(".mp4", "")
         slug = generate_slug(final_post_title)
         
-        # Build exact 'streams' row payload
+        # Build exact 'streams' row payload with empty backdrop_url
         payload = {
             "title": final_post_title,
             "slug": slug,
             "embed_url": job["streamtape_url"], # https://streamtape.com/e/XXXXX/
             "poster_url": meta.get("image") or "",
-            "backdrop_url": meta.get("image") or "",
+            "backdrop_url": None, # Kept strictly empty
             "description": meta.get("description") or "",
             "cast_members": meta.get("tags") or "",  # Exactly saved to cast_members column!
             "is_stream": True,
@@ -778,5 +778,6 @@ with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
     st.markdown("""
     - **✨ Automatic Title & Slug:** The app auto-extracts the title from magnet/Seedr links and generates the clean `slug` required by your Supabase table.
     - **Tags ➔ 'cast_members':** Whatever tags/keywords you enter in the Tags box are automatically saved into your Supabase `cast_members` column.
+    - **`backdrop_url`:** Kept strictly empty (`null`).
     - **Streamtape Player Link (`/e/`):** Formats Streamtape uploads into `https://streamtape.com/e/Je0ZqOama0cjj89/` for instant playback.
     """)
