@@ -185,11 +185,11 @@ except Exception:
 st.markdown("""
 <div class="hero-container">
     <div class="hero-title">⚡ MagToMP ➔ Streamtape & Supabase Hub</div>
-    <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish metadata directly to your Supabase database.</div>
+    <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish direct player links to Supabase.</div>
     <div class="badge-container">
-        <span class="badge-auto">✨ Auto Title Detection</span>
+        <span class="badge-st">🎬 Streamtape /e/ Player Links</span>
         <span class="badge-sb">⚡ Direct Supabase Push</span>
-        <span class="badge-st">🚀 Streamtape Direct</span>
+        <span class="badge-auto">✨ Auto Title Detection</span>
         <span class="badge">💻 Zero PC Bandwidth</span>
     </div>
 </div>
@@ -309,7 +309,7 @@ def insert_to_supabase(sb_url, sb_key, sb_table, payload):
         return False, f"Supabase Error ({res.status_code}): {res.text}"
 
 def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: str, job_dict):
-    """Uploads directly to Streamtape with live MB tracking."""
+    """Uploads directly to Streamtape and returns the /e/ direct player URL with live MB tracking."""
     url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
     res = requests.get(url_req, timeout=15).json()
     if res.get("status") != 200:
@@ -333,7 +333,13 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
         upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
 
     if upload_res.get("status") == 200:
-        return upload_res["result"]["url"]
+        raw_url = upload_res["result"]["url"]
+        # Format into clean direct embed player URL: https://streamtape.com/e/{filecode}/
+        match = re.search(r'/v/([a-zA-Z0-9_-]+)', raw_url)
+        if match:
+            filecode = match.group(1)
+            return f"https://streamtape.com/e/{filecode}/"
+        return raw_url
     else:
         raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
 
@@ -368,7 +374,7 @@ def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job
 
     if upload_res.get("status") == 200 and upload_res.get("files"):
         file_code = upload_res["files"][0].get("filecode")
-        return f"https://lulustream.com/{file_code}"
+        return f"https://lulustream.com/e/{file_code}"
     else:
         raise Exception(f"LuluStream upload failed: {upload_res}")
 
@@ -402,14 +408,12 @@ def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dic
         headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
         upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
 
-    if upload_res.get("url"):
+    if upload_res.get("filecode"):
+        return f"https://vidara.so/e/{upload_res['filecode']}"
+    elif upload_res.get("url"):
         return upload_res["url"]
-    elif upload_res.get("filecode"):
-        return f"https://vidara.so/v/{upload_res['filecode']}"
-    elif upload_res.get("result", {}).get("url"):
-        return upload_res["result"]["url"]
     elif upload_res.get("result", {}).get("filecode"):
-        return f"https://vidara.so/v/{upload_res['result']['filecode']}"
+        return f"https://vidara.so/e/{upload_res['result']['filecode']}"
     else:
         err_msg = upload_res.get("error") or upload_res.get("msg") or upload_res
         raise Exception(f"Vidara error: {err_msg}")
@@ -544,7 +548,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     # 3. Fault-Tolerant Multi-Host Uploads
     upload_errors = []
     
-    # Streamtape
+    # Streamtape (Returns /e/ embed player link)
     if "Streamtape" in targets and st_creds[0] and st_creds[1]:
         try:
             job["progress"] = 75
@@ -574,7 +578,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         except Exception as e:
             upload_errors.append(f"Vidara.so: {str(e)}")
 
-    # 4. Insert into Supabase (if enabled)
+    # 4. Insert into Supabase (Saves the /e/ direct player URL)
     if supabase_config.get("enabled") and job.get("streamtape_url"):
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase Database..."
         
@@ -591,7 +595,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             cols.get("description", "description"): meta.get("description") or "",
             cols.get("tags", "tags"): parsed_tags if parsed_tags else raw_tags,
             cols.get("image", "image"): meta.get("image") or "",
-            cols.get("video_url", "video_url"): job["streamtape_url"]
+            cols.get("video_url", "video_url"): job["streamtape_url"] # Exact /e/ player link!
         }
         
         success, sb_res = insert_to_supabase(
@@ -731,21 +735,21 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
             
             # Streamtape Card
             if job.get("streamtape_url"):
-                st.markdown("#### 🚀 Streamtape Direct Video Link:")
+                st.markdown("#### 🚀 Streamtape Direct Player URL (`/e/`):")
                 st.code(job["streamtape_url"], language="text")
-                st.markdown(f"👉 [**▶️ Open on Streamtape**]({job['streamtape_url']})")
+                st.markdown(f"👉 [**▶️ Open Streamtape Player**]({job['streamtape_url']})")
                 
             # LuluStream Card
             if job.get("lulustream_url"):
-                st.markdown("#### 🟣 LuluStream Video Link:")
+                st.markdown("#### 🟣 LuluStream Direct Player Link:")
                 st.code(job["lulustream_url"], language="text")
-                st.markdown(f"👉 [**▶️ Open on LuluStream**]({job['lulustream_url']})")
+                st.markdown(f"👉 [**▶️ Open LuluStream Player**]({job['lulustream_url']})")
 
             # Vidara Card
             if job.get("vidara_url"):
-                st.markdown("#### 🟢 Vidara.so Video Link:")
+                st.markdown("#### 🟢 Vidara.so Direct Player Link:")
                 st.code(job["vidara_url"], language="text")
-                st.markdown(f"👉 [**▶️ Open on Vidara.so**]({job['vidara_url']})")
+                st.markdown(f"👉 [**▶️ Open Vidara Player**]({job['vidara_url']})")
                 
             # Display Image Preview if user provided
             if meta.get("image"):
@@ -763,5 +767,6 @@ st.markdown("---")
 with st.expander("ℹ️ How Auto-Title & Supabase Integration Works"):
     st.markdown("""
     - **✨ Automatic Title Extraction:** The moment you paste a magnet or Seedr/direct video link, the app extracts and cleans the original title and pre-fills the Video Title box for you. You can keep it or edit it!
-    - **Supabase Auto-Insert:** After uploading to Streamtape, the record with your title, tags, description, poster image, and direct video URL is inserted into your Supabase table automatically.
+    - **Streamtape Player Link (`/e/`):** Streamtape video uploads are automatically formatted to direct player links (e.g. `https://streamtape.com/e/Je0ZqOama0cjj89/`) so your Next.js/Vercel video player can load them directly.
+    - **Supabase Auto-Insert:** The record with your title, tags, description, poster image, and `/e/` video URL is inserted into your Supabase table automatically.
     """)
