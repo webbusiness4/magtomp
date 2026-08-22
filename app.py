@@ -188,19 +188,6 @@ try:
 except Exception:
     pass
 
-# Header Section
-st.markdown("""
-<div class="hero-container">
-    <div class="hero-title">⚡ MagToMP ➔ Streamtape & Supabase Hub</div>
-    <div class="hero-sub">Convert magnet/Seedr links to MP4, upload to Streamtape, and publish direct player links to Supabase.</div>
-    <div class="badge-container">
-        <span class="badge-st">🎬 Streamtape /e/ Player Links</span>
-        <span class="badge-sb">⚡ Supabase 'streams' Direct</span>
-        <span class="badge-auto">✨ Auto Title Detection</span>
-        <span class="badge">💻 Zero PC Bandwidth</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
 # Sidebar Settings
 with st.sidebar:
