@@ -139,12 +139,33 @@ def extract_auto_title(url: str) -> str:
         except Exception:
             pass
             
-    # 2. Direct HTTP / Seedr URLs
+    # 2. Direct HTTP / Seedr / PikPak / CDN URLs
     elif url.startswith(("http://", "https://")):
         try:
             path = urlsplit(url).path
             filename = os.path.basename(unquote(path))
-            if filename:
+            # If filename has a recognizable media extension
+            if filename and any(filename.lower().endswith(ext) for ext in [".mp4", ".mkv", ".avi", ".ts", ".mov", ".webm", ".m4v", ".flv", ".zip", ".rar"]):
+                base, _ = os.path.splitext(filename)
+                return base.replace(".", " ").replace("_", " ").strip()
+            
+            # Dynamic / CDN query-based URLs (PikPak, Debrid, Drive): Inspect Content-Disposition header
+            try:
+                head_res = requests.get(url, stream=True, timeout=3.5, headers={"User-Agent": "Mozilla/5.0"})
+                cd = head_res.headers.get("Content-Disposition", "")
+                head_res.close()
+                if cd:
+                    match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)["\']?', cd, re.IGNORECASE)
+                    if match:
+                        raw_fn = unquote(match.group(1).strip())
+                        base, _ = os.path.splitext(raw_fn)
+                        clean = base.replace(".", " ").replace("_", " ").strip()
+                        if clean:
+                            return clean
+            except Exception:
+                pass
+                
+            if filename and filename.lower() not in ["download", "get", "view", "index.html", ""]:
                 base, _ = os.path.splitext(filename)
                 return base.replace(".", " ").replace("_", " ").strip()
         except Exception:
@@ -452,11 +473,13 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     else:
         parsed_url = urlparse(input_url)
         path_name = os.path.basename(unquote(parsed_url.path))
-        out_opt = [f"--out={path_name}"] if path_name else []
+        has_ext = bool(re.search(r'\.[a-zA-Z0-9]{2,4}$', path_name)) and path_name.lower() not in ["download", "get", "view"]
+        out_opt = [f"--out={path_name}"] if has_ext else []
         
         job["message"] = f"📥 Step 1/3: Downloading direct file at Gigabit speed... (5%)"
         cmd_aria = [
             "aria2c",
+            "--content-disposition-default-utf8=true",
             "--max-connection-per-server=16",
             "--split=16",
             "--summary-interval=1",
@@ -508,6 +531,21 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     all_videos = []
     for ext in media_exts:
         all_videos.extend(glob.glob(f"{work_dir}/**/{ext}", recursive=True))
+
+    if not all_videos:
+        # Fallback: scan all non-aria2 files > 1MB in work_dir
+        candidates = []
+        for root, _, files in os.walk(work_dir):
+            for f in files:
+                if not f.endswith(".aria2"):
+                    full_p = os.path.join(root, f)
+                    try:
+                        if os.path.getsize(full_p) > 1024 * 1024:
+                            candidates.append(full_p)
+                    except Exception:
+                        pass
+        if candidates:
+            all_videos = candidates
 
     if not all_videos:
         job["status"] = "error"
