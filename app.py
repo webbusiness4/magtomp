@@ -533,22 +533,28 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     if largest_video.endswith(".mp4"):
         shutil.move(largest_video, output_mp4)
     else:
-        # 1. Try instantaneous direct stream copy (-c copy)
+        # 1. Instantaneous direct stream copy (-map main video/audio, strip incompatible subtitles)
         cmd_fast = [
             "ffmpeg", "-y",
             "-i", largest_video,
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
             "-c", "copy",
+            "-sn",
             output_mp4
         ]
         res = subprocess.run(cmd_fast, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # 2. Fall back to audio transcoding only if -c copy fails
-        if res.returncode != 0:
+        # 2. Fall back to AAC audio transcoding only if -c copy fails
+        if res.returncode != 0 or not os.path.exists(output_mp4) or os.path.getsize(output_mp4) == 0:
             cmd_fallback = [
                 "ffmpeg", "-y",
                 "-i", largest_video,
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
                 "-c:v", "copy",
                 "-c:a", "aac",
+                "-sn",
                 output_mp4
             ]
             subprocess.run(cmd_fallback, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
