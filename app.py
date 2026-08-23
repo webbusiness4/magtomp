@@ -458,7 +458,10 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     
     is_magnet = input_url.startswith("magnet:?")
     
-    # 1. Download via aria2c
+    # 1. Download via aria2c or direct Python stream
+    download_success = False
+    download_error_log = []
+
     if is_magnet:
         job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
         cmd_aria = [
@@ -470,52 +473,117 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             f"--dir={work_dir}",
             input_url
         ]
+        try:
+            proc = subprocess.Popen(
+                cmd_aria,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            last_pct = 5
+            for line in proc.stdout:
+                download_error_log.append(line.strip())
+                if len(download_error_log) > 15:
+                    download_error_log.pop(0)
+                match = re.search(r'\((\d+)%\)', line)
+                if match:
+                    dl_pct = int(match.group(1))
+                    overall_pct = int(5 + (dl_pct * 0.45))
+                    if overall_pct > last_pct:
+                        last_pct = overall_pct
+                        job["progress"] = overall_pct
+                        job["message"] = f"📥 Step 1/3: Downloading Torrent ({dl_pct}% downloaded | {overall_pct}% total)"
+            proc.wait()
+            if proc.returncode == 0:
+                download_success = True
+        except Exception as e:
+            download_error_log.append(str(e))
     else:
+        # Direct HTTP / Seedr / PikPak / Debrid URL
+        job["message"] = "📥 Step 1/3: Connecting to direct video stream... (5%)"
         parsed_url = urlparse(input_url)
         path_name = os.path.basename(unquote(parsed_url.path))
         has_ext = bool(re.search(r'\.[a-zA-Z0-9]{2,4}$', path_name)) and path_name.lower() not in ["download", "get", "view"]
         out_opt = [f"--out={path_name}"] if has_ext else []
         
-        job["message"] = f"📥 Step 1/3: Downloading direct file at Gigabit speed... (5%)"
         cmd_aria = [
             "aria2c",
-            "--content-disposition-default-utf8=true",
-            "--max-connection-per-server=16",
-            "--split=16",
+            "--check-certificate=false",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--max-connection-per-server=8",
+            "--split=8",
             "--summary-interval=1",
             f"--dir={work_dir}"
         ] + out_opt + [input_url]
-    
-    try:
-        proc = subprocess.Popen(
-            cmd_aria,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        
-        last_pct = 5
-        for line in proc.stdout:
-            match = re.search(r'\((\d+)%\)', line)
-            if match:
-                dl_pct = int(match.group(1))
-                overall_pct = int(5 + (dl_pct * 0.45))
-                if overall_pct > last_pct:
-                    last_pct = overall_pct
-                    job["progress"] = overall_pct
-                    job["message"] = f"📥 Step 1/3: Downloading Data ({dl_pct}% downloaded | {overall_pct}% total)"
-        
-        proc.wait()
-        if proc.returncode != 0:
-            job["status"] = "error"
-            job["error"] = "Download failed on cloud server. Verify the URL/Magnet is accessible."
-            cleanup_workspace([work_dir, converted_dir])
-            return
-            
-    except Exception as e:
+
+        try:
+            proc = subprocess.Popen(
+                cmd_aria,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            last_pct = 5
+            for line in proc.stdout:
+                download_error_log.append(line.strip())
+                if len(download_error_log) > 15:
+                    download_error_log.pop(0)
+                match = re.search(r'\((\d+)%\)', line)
+                if match:
+                    dl_pct = int(match.group(1))
+                    overall_pct = int(5 + (dl_pct * 0.45))
+                    if overall_pct > last_pct:
+                        last_pct = overall_pct
+                        job["progress"] = overall_pct
+                        job["message"] = f"📥 Step 1/3: Downloading Data ({dl_pct}% downloaded | {overall_pct}% total)"
+            proc.wait()
+            if proc.returncode == 0:
+                download_success = True
+        except Exception as e:
+            download_error_log.append(str(e))
+
+        # Direct Python Stream Fallback if aria2 failed on direct HTTP URL
+        if not download_success:
+            try:
+                job["message"] = "📥 Step 1/3: Downloading via Cloud Stream Pipeline... (10%)"
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+                with requests.get(input_url, headers=headers, stream=True, timeout=30) as r:
+                    if r.status_code == 200:
+                        cd = r.headers.get("Content-Disposition", "")
+                        match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)["\']?', cd, re.IGNORECASE)
+                        fn = unquote(match.group(1).strip()) if match else (path_name if has_ext else "video.mp4")
+                        if not any(fn.lower().endswith(ext) for ext in [".mp4", ".mkv", ".avi", ".ts", ".mov", ".webm", ".m4v"]):
+                            fn = f"{fn}.mp4"
+                        target_file_path = os.path.join(work_dir, fn)
+                        total_bytes = int(r.headers.get("Content-Length", 0))
+                        downloaded = 0
+                        last_pct = 10
+                        with open(target_file_path, "wb") as f_out:
+                            for chunk in r.iter_content(chunk_size=1024 * 1024 * 2): # 2MB chunks
+                                if chunk:
+                                    f_out.write(chunk)
+                                    downloaded += len(chunk)
+                                    if total_bytes > 0:
+                                        dl_pct = int((downloaded / total_bytes) * 100)
+                                        overall_pct = int(5 + (dl_pct * 0.45))
+                                        if overall_pct > last_pct:
+                                            last_pct = overall_pct
+                                            job["progress"] = overall_pct
+                                            dl_mb = round(downloaded / (1024 * 1024), 1)
+                                            tot_mb = round(total_bytes / (1024 * 1024), 1)
+                                            job["message"] = f"📥 Step 1/3: Streaming Data: {dl_mb} MB / {tot_mb} MB ({dl_pct}%)"
+                        download_success = True
+                    else:
+                        download_error_log.append(f"HTTP Error {r.status_code}: {r.reason}")
+            except Exception as ex:
+                download_error_log.append(f"Stream error: {str(ex)}")
+
+    if not download_success:
         job["status"] = "error"
-        job["error"] = f"Download error: {str(e)}"
+        err_detail = " | ".join([l for l in download_error_log if l])[-200:]
+        job["error"] = f"Download failed: {err_detail if err_detail else 'Link was inaccessible or expired.'}"
         cleanup_workspace([work_dir, converted_dir])
         return
 
