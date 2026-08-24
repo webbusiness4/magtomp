@@ -145,7 +145,7 @@ def write_github_summary(title, streamtape_url, slug, supabase_res, file_size_mb
 
 def main():
     parser = argparse.ArgumentParser(description="Headless MagToMP Video Worker for GitHub Actions")
-    parser.add_argument("--url", required=True, help="Magnet Link or Direct Video URL")
+    parser.add_argument("--url", default="", help="Magnet Link or Direct Video URL")
     parser.add_argument("--title", default="", help="Custom Video Title")
     parser.add_argument("--poster", default="", help="Poster Image URL")
     parser.add_argument("--tags", default="", help="Comma-separated tags (stored in cast_members)")
@@ -157,6 +157,16 @@ def main():
     parser.add_argument("--sb-table", default=os.environ.get("SUPABASE_TABLE", "streams"))
 
     args = parser.parse_args()
+
+    input_url = (args.url or os.environ.get("INPUT_URL") or "").strip()
+    if not input_url:
+        print("❌ Error: No video URL provided! Pass --url or set INPUT_URL environment variable.")
+        sys.exit(1)
+
+    custom_title = (args.title or os.environ.get("INPUT_TITLE") or "").strip()
+    custom_poster = (args.poster or os.environ.get("INPUT_POSTER") or "").strip()
+    custom_tags = (args.tags or os.environ.get("INPUT_TAGS") or "").strip()
+    custom_desc = (args.desc or os.environ.get("INPUT_DESC") or "").strip()
 
     work_dir = "./worker_downloads"
     converted_dir = "./worker_converted"
@@ -264,7 +274,7 @@ def main():
     largest_video = max(all_videos, key=os.path.getsize)
     orig_name = os.path.basename(largest_video)
 
-    final_title = args.title.strip() if args.title.strip() else extract_auto_title(input_url)
+    final_title = custom_title if custom_title else extract_auto_title(input_url)
     if not final_title:
         base_t, _ = os.path.splitext(orig_name)
         final_title = base_t.replace(".", " ").replace("_", " ").strip()
@@ -316,10 +326,10 @@ def main():
             "title": final_title,
             "slug": slug,
             "embed_url": st_url,
-            "poster_url": args.poster.strip() if args.poster else "",
+            "poster_url": custom_poster,
             "backdrop_url": None,
-            "description": args.desc.strip() if args.desc else "",
-            "cast_members": args.tags.strip() if args.tags else "",
+            "description": custom_desc,
+            "cast_members": custom_tags,
             "is_stream": True,
             "status": "published"
         }

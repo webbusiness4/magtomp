@@ -56,15 +56,15 @@ jobs:
 
       - name: 🚀 Run Video Processor Worker
         env:
+          INPUT_URL: ${{ github.event.inputs.video_url }}
+          INPUT_TITLE: ${{ github.event.inputs.video_title }}
+          INPUT_POSTER: ${{ github.event.inputs.poster_url }}
+          INPUT_TAGS: ${{ github.event.inputs.tags }}
+          INPUT_DESC: ${{ github.event.inputs.description }}
           STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
           STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE || 'streams' }}
         run: |
-          python worker.py \
-            --url "${{ github.event.inputs.video_url }}" \
-            --title "${{ github.event.inputs.video_title }}" \
-            --poster "${{ github.event.inputs.poster_url }}" \
-            --tags "${{ github.event.inputs.tags }}" \
-            --desc "${{ github.event.inputs.description }}"
+          python worker.py
