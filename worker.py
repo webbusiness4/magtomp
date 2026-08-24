@@ -191,6 +191,38 @@ def main():
     if not sb_table:
         sb_table = "streams"
 
+PUBLIC_TRACKERS = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.popcorn-tracker.org:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+    "http://tracker.openbittorrent.com:80/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://opentracker.i2p.rocks:6969/announce",
+    "udp://tracker.moeking.me:6969/announce"
+]
+
+def boost_magnet_link(magnet: str) -> str:
+    """Automatically appends active high-speed public trackers to magnet links."""
+    if not magnet.startswith("magnet:?"):
+        return magnet
+    existing_trackers = set()
+    try:
+        qs = parse_qs(urlsplit(magnet).query)
+        existing_trackers = set(qs.get("tr", []))
+    except Exception:
+        pass
+    
+    new_tr = [f"tr={urllib.parse.quote(tr, safe='')}" for tr in PUBLIC_TRACKERS if tr not in existing_trackers]
+    if new_tr:
+        sep = "&" if "?" in magnet else "?"
+        return magnet + sep + "&".join(new_tr)
+    return magnet
+
     work_dir = "./worker_downloads"
     converted_dir = "./worker_converted"
 
@@ -198,7 +230,6 @@ def main():
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(converted_dir, exist_ok=True)
 
-    input_url = args.url.strip()
     is_magnet = input_url.startswith("magnet:?")
 
     print("=" * 60)
@@ -210,14 +241,23 @@ def main():
     download_success = False
 
     if is_magnet:
+        boosted_magnet = boost_magnet_link(input_url)
+        print("⚡ Injected live BitTorrent trackers for accelerated peer discovery.")
         cmd_aria = [
             "aria2c",
             "--seed-time=0",
             "--max-connection-per-server=16",
             "--split=16",
+            "--enable-dht=true",
+            "--enable-peer-exchange=true",
+            "--bt-enable-lpd=true",
+            "--bt-max-peers=120",
+            "--bt-tracker-connect-timeout=5",
+            "--bt-tracker-timeout=5",
+            "--file-allocation=none",
             "--summary-interval=2",
             f"--dir={work_dir}",
-            input_url
+            boosted_magnet
         ]
         res = subprocess.run(cmd_aria)
         if res.returncode == 0:

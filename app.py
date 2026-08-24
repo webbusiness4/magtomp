@@ -173,6 +173,38 @@ def extract_auto_title(url: str) -> str:
             
     return ""
 
+PUBLIC_TRACKERS = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.popcorn-tracker.org:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+    "http://tracker.openbittorrent.com:80/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://opentracker.i2p.rocks:6969/announce",
+    "udp://tracker.moeking.me:6969/announce"
+]
+
+def boost_magnet_link(magnet: str) -> str:
+    """Automatically appends active high-speed public trackers to magnet links."""
+    if not magnet.startswith("magnet:?"):
+        return magnet
+    existing_trackers = set()
+    try:
+        qs = parse_qs(urlsplit(magnet).query)
+        existing_trackers = set(qs.get("tr", []))
+    except Exception:
+        pass
+    
+    new_tr = [f"tr={urllib.parse.quote(tr, safe='')}" for tr in PUBLIC_TRACKERS if tr not in existing_trackers]
+    if new_tr:
+        sep = "&" if "?" in magnet else "?"
+        return magnet + sep + "&".join(new_tr)
+    return magnet
+
 # Retrieve Default Secrets & Aliases
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
@@ -463,15 +495,23 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
     download_error_log = []
 
     if is_magnet:
-        job["message"] = "📥 Step 1/3: Downloading torrent in cloud at Gigabit speed... (5%)"
+        boosted_magnet = boost_magnet_link(input_url)
+        job["message"] = "📥 Step 1/3: Injected live trackers & discovering torrent peers... (5%)"
         cmd_aria = [
             "aria2c",
             "--seed-time=0",
             "--max-connection-per-server=16",
             "--split=16",
+            "--enable-dht=true",
+            "--enable-peer-exchange=true",
+            "--bt-enable-lpd=true",
+            "--bt-max-peers=120",
+            "--bt-tracker-connect-timeout=5",
+            "--bt-tracker-timeout=5",
+            "--file-allocation=none",
             "--summary-interval=1",
             f"--dir={work_dir}",
-            input_url
+            boosted_magnet
         ]
         try:
             proc = subprocess.Popen(
