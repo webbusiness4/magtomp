@@ -11,6 +11,38 @@ import urllib.parse
 from urllib.parse import urlparse, unquote, urlsplit, parse_qs
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
+PUBLIC_TRACKERS = [
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://tracker.bittor.pw:1337/announce",
+    "udp://public.popcorn-tracker.org:6969/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+    "http://tracker.openbittorrent.com:80/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://opentracker.i2p.rocks:6969/announce",
+    "udp://tracker.moeking.me:6969/announce"
+]
+
+def boost_magnet_link(magnet: str) -> str:
+    """Automatically appends active high-speed public trackers to magnet links."""
+    if not magnet.startswith("magnet:?"):
+        return magnet
+    existing_trackers = set()
+    try:
+        qs = parse_qs(urlsplit(magnet).query)
+        existing_trackers = set(qs.get("tr", []))
+    except Exception:
+        pass
+    
+    new_tr = [f"tr={urllib.parse.quote(tr, safe='')}" for tr in PUBLIC_TRACKERS if tr not in existing_trackers]
+    if new_tr:
+        sep = "&" if "?" in magnet else "?"
+        return magnet + sep + "&".join(new_tr)
+    return magnet
+
 def generate_slug(title: str) -> str:
     """Generates a clean URL slug from title."""
     s = re.sub(r'[^a-zA-Z0-9\s-]', '', title.lower()).strip()
@@ -95,7 +127,7 @@ def insert_to_supabase(sb_url, sb_key, sb_table, payload):
         return False, f"Supabase Error ({res.status_code}): {res.text}"
 
 def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: str):
-    print(f"🚀 Getting upload URL from Streamtape for '{custom_filename}'...")
+    print(f"🚀 Requesting upload URL from Streamtape for '{custom_filename}'...")
     url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
     res = requests.get(url_req, timeout=15).json()
     if res.get("status") != 200:
@@ -149,7 +181,7 @@ def write_github_error(err_title, err_detail):
         with open(summary_file, "a", encoding="utf-8") as f:
             f.write(f"## ❌ Job Failed: {err_title}\n\n")
             f.write(f"```text\n{err_detail}\n```\n\n")
-            f.write(f"👉 **Tip:** If using PikPak, check that the link has not expired. If using Magnet, pass it through Seedr.cc for instant Gigabit cloud transfer.\n")
+            f.write(f"👉 **Tip:** Check that your video link is accessible and active.\n")
 
 def main():
     parser = argparse.ArgumentParser(description="Headless MagToMP Video Worker for GitHub Actions")
@@ -191,38 +223,6 @@ def main():
     if not sb_table:
         sb_table = "streams"
 
-PUBLIC_TRACKERS = [
-    "udp://tracker.opentrackr.org:1337/announce",
-    "udp://open.stealth.si:80/announce",
-    "udp://tracker.torrent.eu.org:451/announce",
-    "udp://tracker.bittor.pw:1337/announce",
-    "udp://public.popcorn-tracker.org:6969/announce",
-    "udp://tracker.dler.org:6969/announce",
-    "udp://exodus.desync.com:6969/announce",
-    "udp://open.demonii.com:1337/announce",
-    "http://tracker.openbittorrent.com:80/announce",
-    "udp://tracker.openbittorrent.com:6969/announce",
-    "udp://opentracker.i2p.rocks:6969/announce",
-    "udp://tracker.moeking.me:6969/announce"
-]
-
-def boost_magnet_link(magnet: str) -> str:
-    """Automatically appends active high-speed public trackers to magnet links."""
-    if not magnet.startswith("magnet:?"):
-        return magnet
-    existing_trackers = set()
-    try:
-        qs = parse_qs(urlsplit(magnet).query)
-        existing_trackers = set(qs.get("tr", []))
-    except Exception:
-        pass
-    
-    new_tr = [f"tr={urllib.parse.quote(tr, safe='')}" for tr in PUBLIC_TRACKERS if tr not in existing_trackers]
-    if new_tr:
-        sep = "&" if "?" in magnet else "?"
-        return magnet + sep + "&".join(new_tr)
-    return magnet
-
     work_dir = "./worker_downloads"
     converted_dir = "./worker_converted"
 
@@ -234,6 +234,7 @@ def boost_magnet_link(magnet: str) -> str:
 
     print("=" * 60)
     print("🎬 MagToMP GitHub Actions Worker Started")
+    print(f"🔗 Target: {input_url[:80]}...")
     print("=" * 60)
 
     # 1. Download
@@ -380,7 +381,7 @@ def boost_magnet_link(magnet: str) -> str:
     print(f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB).")
 
     # 3. Streamtape Upload
-    print("🚀 Step 3/3: Uploading to Streamtape...")
+    print(f"🚀 Step 3/3: Uploading to Streamtape (Account: {st_login[:5]}***)...")
     try:
         st_url = upload_to_streamtape(output_mp4, target_filename, st_login, st_key)
         print(f"🎉 Streamtape Player Link: {st_url}")
@@ -414,6 +415,8 @@ def boost_magnet_link(magnet: str) -> str:
         else:
             sb_status_msg = f"⚠️ Supabase Error: {sb_res}"
             print(f"   {sb_status_msg}")
+    else:
+        print("⚠️ Supabase credentials missing; skipped database insertion.")
 
     write_github_summary(final_title, st_url, generate_slug(final_title), sb_status_msg, file_size_mb)
     cleanup_workspace([work_dir, converted_dir])
