@@ -1,0 +1,70 @@
+name: 🎬 MagToMP Cloud Video Processor
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "Magnet link OR Direct URL (Seedr, PikPak, Debrid)"
+        required: true
+        type: string
+      video_title:
+        description: "Custom Video Title (leave blank to auto-detect)"
+        required: false
+        type: string
+        default: ""
+      poster_url:
+        description: "Poster Image URL (poster_url)"
+        required: false
+        type: string
+        default: ""
+      tags:
+        description: "Tags (comma-separated ➔ cast_members)"
+        required: false
+        type: string
+        default: ""
+      description:
+        description: "Video Description (description)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  convert_and_upload:
+    name: ⚡ Process & Upload Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours max
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Install System Dependencies (aria2 + ffmpeg)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq aria2 ffmpeg
+
+      - name: 📦 Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests requests-toolbelt
+
+      - name: 🚀 Run Video Processor Worker
+        env:
+          STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
+          STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE || 'streams' }}
+        run: |
+          python worker.py \
+            --url "${{ github.event.inputs.video_url }}" \
+            --title "${{ github.event.inputs.video_title }}" \
+            --poster "${{ github.event.inputs.poster_url }}" \
+            --tags "${{ github.event.inputs.tags }}" \
+            --desc "${{ github.event.inputs.description }}"
