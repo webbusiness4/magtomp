@@ -234,7 +234,11 @@ def main():
 
     print("=" * 60)
     print("🎬 MagToMP GitHub Actions Worker Started")
-    print(f"🔗 Target: {input_url[:80]}...")
+    print(f"🔗 Target URL: {input_url[:80]}...")
+    print(f"📡 Streamtape Account: {st_login[:6]}***")
+    print(f"⚡ Supabase URL: {'✅ ' + sb_url[:20] + '...' if sb_url else '❌ NOT DETECTED'}")
+    print(f"⚡ Supabase Key: {'✅ Present' if sb_key else '❌ NOT DETECTED'}")
+    print(f"⚡ Supabase Table: {sb_table}")
     print("=" * 60)
 
     # 1. Download

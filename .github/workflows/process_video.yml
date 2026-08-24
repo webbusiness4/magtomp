@@ -63,8 +63,11 @@ jobs:
           INPUT_DESC: ${{ github.event.inputs.description }}
           STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
           STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE || 'streams' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_TABLE: ${{ secrets.SUPABASE_TABLE }}
         run: |
           python worker.py
