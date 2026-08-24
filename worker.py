@@ -143,6 +143,14 @@ def write_github_summary(title, streamtape_url, slug, supabase_res, file_size_mb
             f.write(f"### Embed Link\n")
             f.write(f"`{streamtape_url}`\n")
 
+def write_github_error(err_title, err_detail):
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file and os.path.exists(os.path.dirname(summary_file)):
+        with open(summary_file, "a", encoding="utf-8") as f:
+            f.write(f"## ❌ Job Failed: {err_title}\n\n")
+            f.write(f"```text\n{err_detail}\n```\n\n")
+            f.write(f"👉 **Tip:** If using PikPak, check that the link has not expired. If using Magnet, pass it through Seedr.cc for instant Gigabit cloud transfer.\n")
+
 def main():
     parser = argparse.ArgumentParser(description="Headless MagToMP Video Worker for GitHub Actions")
     parser.add_argument("--url", default="", help="Magnet Link or Direct Video URL")
@@ -150,23 +158,38 @@ def main():
     parser.add_argument("--poster", default="", help="Poster Image URL")
     parser.add_argument("--tags", default="", help="Comma-separated tags (stored in cast_members)")
     parser.add_argument("--desc", default="", help="Video Description")
-    parser.add_argument("--st-login", default=os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b"))
-    parser.add_argument("--st-key", default=os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD"))
-    parser.add_argument("--sb-url", default=os.environ.get("SUPABASE_URL", os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")))
-    parser.add_argument("--sb-key", default=os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", ""))))
-    parser.add_argument("--sb-table", default=os.environ.get("SUPABASE_TABLE", "streams"))
+    parser.add_argument("--st-login", default="")
+    parser.add_argument("--st-key", default="")
+    parser.add_argument("--sb-url", default="")
+    parser.add_argument("--sb-key", default="")
+    parser.add_argument("--sb-table", default="")
 
     args = parser.parse_args()
 
     input_url = (args.url or os.environ.get("INPUT_URL") or "").strip()
     if not input_url:
-        print("❌ Error: No video URL provided! Pass --url or set INPUT_URL environment variable.")
+        msg = "No video URL provided! Pass --url or set INPUT_URL environment variable."
+        print(f"❌ Error: {msg}")
+        write_github_error("Missing URL", msg)
         sys.exit(1)
 
     custom_title = (args.title or os.environ.get("INPUT_TITLE") or "").strip()
     custom_poster = (args.poster or os.environ.get("INPUT_POSTER") or "").strip()
     custom_tags = (args.tags or os.environ.get("INPUT_TAGS") or "").strip()
     custom_desc = (args.desc or os.environ.get("INPUT_DESC") or "").strip()
+
+    st_login = (args.st_login or os.environ.get("STREAMTAPE_LOGIN") or "1508538fc96ca7edcd0b").strip()
+    if not st_login:
+        st_login = "1508538fc96ca7edcd0b"
+    st_key = (args.st_key or os.environ.get("STREAMTAPE_KEY") or "9OpkRzZj6OuawrD").strip()
+    if not st_key:
+        st_key = "9OpkRzZj6OuawrD"
+
+    sb_url = (args.sb_url or os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL") or "").strip()
+    sb_key = (args.sb_key or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY") or "").strip()
+    sb_table = (args.sb_table or os.environ.get("SUPABASE_TABLE") or "streams").strip()
+    if not sb_table:
+        sb_table = "streams"
 
     work_dir = "./worker_downloads"
     converted_dir = "./worker_converted"
@@ -245,7 +268,9 @@ def main():
                 print(f"❌ Fallback stream error: {ex}")
 
     if not download_success:
-        print("❌ Error: Download failed.")
+        err_msg = "Download failed. Check if the URL/Magnet is active and accessible."
+        print(f"❌ Error: {err_msg}")
+        write_github_error("Download Failed", err_msg)
         cleanup_workspace([work_dir, converted_dir])
         sys.exit(1)
 
@@ -267,7 +292,9 @@ def main():
                         all_videos.append(fp)
 
     if not all_videos:
-        print("❌ Error: No valid video file found.")
+        err_msg = "No valid video file found in the downloaded archive/file."
+        print(f"❌ Error: {err_msg}")
+        write_github_error("No Media Found", err_msg)
         cleanup_workspace([work_dir, converted_dir])
         sys.exit(1)
 
@@ -314,12 +341,19 @@ def main():
 
     # 3. Streamtape Upload
     print("🚀 Step 3/3: Uploading to Streamtape...")
-    st_url = upload_to_streamtape(output_mp4, target_filename, args.st_login.strip(), args.st_key.strip())
-    print(f"🎉 Streamtape Player Link: {st_url}")
+    try:
+        st_url = upload_to_streamtape(output_mp4, target_filename, st_login, st_key)
+        print(f"🎉 Streamtape Player Link: {st_url}")
+    except Exception as ex:
+        err_msg = f"Streamtape upload failed: {str(ex)}"
+        print(f"❌ Error: {err_msg}")
+        write_github_error("Streamtape Upload Error", err_msg)
+        cleanup_workspace([work_dir, converted_dir])
+        sys.exit(1)
 
     # 4. Supabase Publish
     sb_status_msg = "Skipped (No credentials)"
-    if args.sb_url and args.sb_key:
+    if sb_url and sb_key:
         print("⚡ Step 4/4: Inserting record into Supabase 'streams' table...")
         slug = generate_slug(final_title)
         payload = {
@@ -333,7 +367,7 @@ def main():
             "is_stream": True,
             "status": "published"
         }
-        success, sb_res = insert_to_supabase(args.sb_url, args.sb_key, args.sb_table, payload)
+        success, sb_res = insert_to_supabase(sb_url, sb_key, sb_table, payload)
         if success:
             sb_status_msg = f"✅ Published to Supabase (Slug: {slug})"
             print(f"   {sb_status_msg}")
