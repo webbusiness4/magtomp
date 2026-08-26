@@ -126,42 +126,63 @@ def insert_to_supabase(sb_url, sb_key, sb_table, payload):
     else:
         return False, f"Supabase Error ({res.status_code}): {res.text}"
 
-def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: str):
-    print(f"🚀 Requesting upload URL from Streamtape for '{custom_filename}'...")
-    url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
-    res = requests.get(url_req, timeout=15).json()
-    if res.get("status") != 200:
-        raise Exception(f"Streamtape API Error: {res.get('msg')}")
-    
-    upload_url = res["result"]["url"]
+def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: str, max_retries: int = 3):
     file_size = os.path.getsize(file_path)
     file_size_mb = round(file_size / (1024 * 1024), 2)
-    last_reported_pct = -1
 
-    def on_progress(monitor):
-        nonlocal last_reported_pct
-        up_bytes = monitor.bytes_read
-        up_mb = round(up_bytes / (1024 * 1024), 2)
-        upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
-        if upload_pct >= last_reported_pct + 5 or upload_pct == 100:
-            last_reported_pct = upload_pct
-            print(f"   [Upload] {up_mb} MB / {file_size_mb} MB ({upload_pct}%)")
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"🚀 [Attempt {attempt}/{max_retries}] Requesting fresh upload endpoint from Streamtape for '{custom_filename}'...")
+            url_req = f"https://api.streamtape.com/file/ul?login={login}&key={key}"
+            res = requests.get(url_req, timeout=20).json()
+            if res.get("status") != 200:
+                raise Exception(f"Streamtape API Error: {res.get('msg')}")
+            
+            upload_url = res["result"]["url"]
+            last_reported_pct = -1
 
-    with open(file_path, "rb") as f:
-        encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
-        monitor = MultipartEncoderMonitor(encoder, on_progress)
-        headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
-        upload_res = requests.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+            def on_progress(monitor):
+                nonlocal last_reported_pct
+                up_bytes = monitor.bytes_read
+                up_mb = round(up_bytes / (1024 * 1024), 2)
+                upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+                if upload_pct >= last_reported_pct + 5 or upload_pct == 100:
+                    last_reported_pct = upload_pct
+                    print(f"   [Upload] {up_mb} MB / {file_size_mb} MB ({upload_pct}%)")
 
-    if upload_res.get("status") == 200:
-        raw_url = upload_res["result"]["url"]
-        match = re.search(r'/v/([a-zA-Z0-9_-]+)', raw_url)
-        if match:
-            filecode = match.group(1)
-            return f"https://streamtape.com/e/{filecode}/"
-        return raw_url
-    else:
-        raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(max_retries=3, pool_connections=1, pool_maxsize=1)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+            with open(file_path, "rb") as f:
+                encoder = MultipartEncoder(fields={"file": (custom_filename, f, "video/mp4")})
+                monitor = MultipartEncoderMonitor(encoder, on_progress)
+                headers = {
+                    "Content-Type": monitor.content_type,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Connection": "keep-alive"
+                }
+                upload_res = session.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
+            if upload_res.get("status") == 200:
+                raw_url = upload_res["result"]["url"]
+                match = re.search(r'/v/([a-zA-Z0-9_-]+)', raw_url)
+                if match:
+                    filecode = match.group(1)
+                    return f"https://streamtape.com/e/{filecode}/"
+                return raw_url
+            else:
+                raise Exception(f"Streamtape upload error: {upload_res.get('msg')}")
+
+        except Exception as e:
+            print(f"⚠️ Upload attempt {attempt} encountered error: {str(e)}")
+            if attempt < max_retries:
+                wait_s = attempt * 5
+                print(f"⏳ Retrying in {wait_s}s on a fresh Streamtape upload server...")
+                time.sleep(wait_s)
+            else:
+                raise e
 
 def write_github_summary(title, streamtape_url, slug, supabase_res, file_size_mb):
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
