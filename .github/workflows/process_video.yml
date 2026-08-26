@@ -27,6 +27,11 @@ on:
         required: false
         type: string
         default: ""
+      publish_to_db:
+        description: "Publish record to Supabase Database?"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   convert_and_upload:
@@ -61,6 +66,7 @@ jobs:
           INPUT_POSTER: ${{ github.event.inputs.poster_url }}
           INPUT_TAGS: ${{ github.event.inputs.tags }}
           INPUT_DESC: ${{ github.event.inputs.description }}
+          INPUT_PUBLISH_TO_DB: ${{ github.event.inputs.publish_to_db }}
           STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
           STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

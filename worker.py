@@ -190,6 +190,7 @@ def main():
     parser.add_argument("--poster", default="", help="Poster Image URL")
     parser.add_argument("--tags", default="", help="Comma-separated tags (stored in cast_members)")
     parser.add_argument("--desc", default="", help="Video Description")
+    parser.add_argument("--publish-to-db", default="", help="Whether to publish to Supabase ('true'/'false')")
     parser.add_argument("--st-login", default="")
     parser.add_argument("--st-key", default="")
     parser.add_argument("--sb-url", default="")
@@ -209,6 +210,9 @@ def main():
     custom_poster = (args.poster or os.environ.get("INPUT_POSTER") or "").strip()
     custom_tags = (args.tags or os.environ.get("INPUT_TAGS") or "").strip()
     custom_desc = (args.desc or os.environ.get("INPUT_DESC") or "").strip()
+
+    raw_pub = (args.publish_to_db or os.environ.get("INPUT_PUBLISH_TO_DB") or "true").strip().lower()
+    publish_to_db = raw_pub not in ["false", "0", "no", "off"]
 
     st_login = (args.st_login or os.environ.get("STREAMTAPE_LOGIN") or "1508538fc96ca7edcd0b").strip()
     if not st_login:
@@ -397,8 +401,10 @@ def main():
         sys.exit(1)
 
     # 4. Supabase Publish
-    sb_status_msg = "Skipped (No credentials)"
-    if sb_url and sb_key:
+    sb_status_msg = "Skipped (Disabled by user)"
+    if not publish_to_db:
+        print("⚡ Step 4/4: Supabase publishing disabled by user (Skipped).")
+    elif sb_url and sb_key:
         print("⚡ Step 4/4: Inserting record into Supabase 'streams' table...")
         slug = generate_slug(final_title)
         payload = {
@@ -420,6 +426,7 @@ def main():
             sb_status_msg = f"⚠️ Supabase Error: {sb_res}"
             print(f"   {sb_status_msg}")
     else:
+        sb_status_msg = "Skipped (No credentials)"
         print("⚠️ Supabase credentials missing; skipped database insertion.")
 
     write_github_summary(final_title, st_url, generate_slug(final_title), sb_status_msg, file_size_mb)
