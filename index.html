@@ -307,6 +307,27 @@
           <textarea id="description" placeholder="Short description for Supabase..." rows="2"></textarea>
         </div>
 
+        <div class="form-group">
+          <label>
+            🎯 Upload Video To:
+            <span class="label-hint">Select destination(s)</span>
+          </label>
+          <div style="display: flex; gap: 0.8rem; flex-wrap: wrap; margin-top: 0.4rem;">
+            <label style="flex: 1; min-width: 130px; display: flex; align-items: center; gap: 0.6rem; background: #0b0f19; border: 1px solid #334155; padding: 0.65rem 0.9rem; border-radius: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="destMixdrop" checked style="width: 1.15rem; height: 1.15rem; cursor: pointer; accent-color: var(--accent);">
+              <span>💧 Mixdrop</span>
+            </label>
+            <label style="flex: 1; min-width: 130px; display: flex; align-items: center; gap: 0.6rem; background: #0b0f19; border: 1px solid #334155; padding: 0.65rem 0.9rem; border-radius: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="destStreamtape" checked style="width: 1.15rem; height: 1.15rem; cursor: pointer; accent-color: var(--accent);">
+              <span>🚀 Streamtape</span>
+            </label>
+            <label style="flex: 1; min-width: 130px; display: flex; align-items: center; gap: 0.6rem; background: #0b0f19; border: 1px solid #334155; padding: 0.65rem 0.9rem; border-radius: 10px; cursor: pointer; font-size: 0.9rem;">
+              <input type="checkbox" id="destLulustream" checked style="width: 1.15rem; height: 1.15rem; cursor: pointer; accent-color: var(--accent);">
+              <span>🟣 LuluStream</span>
+            </label>
+          </div>
+        </div>
+
         <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.6rem; margin-top: 0.5rem; margin-bottom: 1.2rem; cursor: pointer;">
           <input type="checkbox" id="publishToDb" checked style="width: 1.1rem; height: 1.1rem; cursor: pointer; accent-color: var(--accent);">
           <label for="publishToDb" style="cursor: pointer; margin-bottom: 0; font-size: 0.88rem; color: #e2e8f0; font-weight: 500;">⚡ Automatically publish record to Supabase Database</label>
@@ -341,6 +362,9 @@
     const tagsInput = document.getElementById('tags');
     const descInput = document.getElementById('description');
     const publishToDb = document.getElementById('publishToDb');
+    const destMixdrop = document.getElementById('destMixdrop');
+    const destStreamtape = document.getElementById('destStreamtape');
+    const destLulustream = document.getElementById('destLulustream');
     
     const statusCard = document.getElementById('statusCard');
     const statusTitle = document.getElementById('statusTitle');
@@ -350,6 +374,15 @@
     // Load saved settings
     tokenInput.value = localStorage.getItem('magtomp_gh_token') || '';
     repoInput.value = localStorage.getItem('magtomp_gh_repo') || 'webbusiness4/magtomp';
+    if (localStorage.getItem('magtomp_dest_mixdrop') !== null) {
+      destMixdrop.checked = localStorage.getItem('magtomp_dest_mixdrop') === 'true';
+    }
+    if (localStorage.getItem('magtomp_dest_streamtape') !== null) {
+      destStreamtape.checked = localStorage.getItem('magtomp_dest_streamtape') === 'true';
+    }
+    if (localStorage.getItem('magtomp_dest_lulustream') !== null) {
+      destLulustream.checked = localStorage.getItem('magtomp_dest_lulustream') === 'true';
+    }
 
     if (!tokenInput.value) {
       settingsBox.style.display = 'block';
@@ -361,6 +394,9 @@
 
     tokenInput.addEventListener('input', () => localStorage.setItem('magtomp_gh_token', tokenInput.value.trim()));
     repoInput.addEventListener('input', () => localStorage.setItem('magtomp_gh_repo', repoInput.value.trim()));
+    destMixdrop.addEventListener('change', () => localStorage.setItem('magtomp_dest_mixdrop', destMixdrop.checked));
+    destStreamtape.addEventListener('change', () => localStorage.setItem('magtomp_dest_streamtape', destStreamtape.checked));
+    destLulustream.addEventListener('change', () => localStorage.setItem('magtomp_dest_lulustream', destLulustream.checked));
 
     // Auto title extraction
     urlInput.addEventListener('input', () => {
@@ -397,6 +433,16 @@
         return;
       }
 
+      const targets = [];
+      if (destMixdrop.checked) targets.push('mixdrop');
+      if (destStreamtape.checked) targets.push('streamtape');
+      if (destLulustream.checked) targets.push('lulustream');
+
+      if (targets.length === 0) {
+        alert('Please select at least one upload destination (Mixdrop, Streamtape, or LuluStream).');
+        return;
+      }
+
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<span class="spinner"></span> Dispatching to GitHub Actions...';
 
@@ -414,7 +460,8 @@
           poster_url: posterInput.value.trim(),
           tags: tagsInput.value.trim(),
           description: descInput.value.trim(),
-          publish_to_db: publishToDb.checked
+          publish_to_db: publishToDb.checked,
+          upload_targets: targets.join(',')
         }
       };
 

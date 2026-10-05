@@ -184,17 +184,130 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
             else:
                 raise e
 
-def write_github_summary(title, streamtape_url, slug, supabase_res, file_size_mb):
+def upload_to_mixdrop(file_path: str, custom_filename: str, email: str, key: str, max_retries: int = 3):
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"💧 [Attempt {attempt}/{max_retries}] Requesting Mixdrop upload for '{custom_filename}'...")
+            upload_url = "https://ul.mixdrop.ag/api"
+            last_reported_pct = -1
+
+            def on_progress(monitor):
+                nonlocal last_reported_pct
+                up_bytes = monitor.bytes_read
+                up_mb = round(up_bytes / (1024 * 1024), 2)
+                upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+                if upload_pct >= last_reported_pct + 5 or upload_pct == 100:
+                    last_reported_pct = upload_pct
+                    print(f"   [Mixdrop Upload] {up_mb} MB / {file_size_mb} MB ({upload_pct}%)")
+
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(max_retries=3, pool_connections=1, pool_maxsize=1)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+            with open(file_path, "rb") as f:
+                encoder = MultipartEncoder(fields={
+                    "email": email,
+                    "key": key,
+                    "file": (custom_filename, f, "video/mp4")
+                })
+                monitor = MultipartEncoderMonitor(encoder, on_progress)
+                headers = {
+                    "Content-Type": monitor.content_type,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Connection": "keep-alive"
+                }
+                upload_res = session.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
+            if upload_res.get("success") is True and upload_res.get("result"):
+                res_data = upload_res["result"]
+                embed_url = res_data.get("embedurl", "")
+                if embed_url.startswith("//"):
+                    embed_url = f"https:{embed_url}"
+                elif not embed_url and res_data.get("fileref"):
+                    embed_url = f"https://mixdrop.co/e/{res_data['fileref']}"
+                elif not embed_url and res_data.get("url"):
+                    embed_url = res_data.get("url")
+                return embed_url
+            else:
+                err_msg = upload_res.get("error") or upload_res.get("result") or upload_res
+                raise Exception(f"Mixdrop API rejected upload: {err_msg}")
+
+        except Exception as e:
+            print(f"⚠️ Mixdrop attempt {attempt} encountered error: {str(e)}")
+            if attempt < max_retries:
+                wait_s = attempt * 5
+                print(f"⏳ Retrying Mixdrop in {wait_s}s...")
+                time.sleep(wait_s)
+            else:
+                raise e
+
+def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, max_retries: int = 3):
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"🟣 [Attempt {attempt}/{max_retries}] Requesting LuluStream upload server for '{custom_filename}'...")
+            srv_req = f"https://lulustream.com/api/upload/server?key={api_key}"
+            srv_res = requests.get(srv_req, timeout=15).json()
+            if srv_res.get("status") != 200 or not srv_res.get("result"):
+                raise Exception(f"LuluStream Server Error: {srv_res.get('msg', srv_res)}")
+                
+            upload_server_url = srv_res["result"]
+            last_reported_pct = -1
+
+            def on_progress(monitor):
+                nonlocal last_reported_pct
+                up_bytes = monitor.bytes_read
+                up_mb = round(up_bytes / (1024 * 1024), 2)
+                upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+                if upload_pct >= last_reported_pct + 5 or upload_pct == 100:
+                    last_reported_pct = upload_pct
+                    print(f"   [LuluStream Upload] {up_mb} MB / {file_size_mb} MB ({upload_pct}%)")
+
+            with open(file_path, "rb") as f:
+                encoder = MultipartEncoder(fields={
+                    "key": api_key,
+                    "api_key": api_key,
+                    "file": (custom_filename, f, "video/mp4"),
+                    "file_title": custom_filename
+                })
+                monitor = MultipartEncoderMonitor(encoder, on_progress)
+                headers = {"Content-Type": monitor.content_type, "User-Agent": "Mozilla/5.0"}
+                upload_res = requests.post(upload_server_url, data=monitor, headers=headers, timeout=3600).json()
+
+            if upload_res.get("status") == 200 and upload_res.get("files"):
+                file_code = upload_res["files"][0].get("filecode")
+                return f"https://lulustream.com/e/{file_code}"
+            else:
+                raise Exception(f"LuluStream upload failed: {upload_res}")
+
+        except Exception as e:
+            print(f"⚠️ LuluStream attempt {attempt} encountered error: {str(e)}")
+            if attempt < max_retries:
+                wait_s = attempt * 5
+                print(f"⏳ Retrying LuluStream in {wait_s}s...")
+                time.sleep(wait_s)
+            else:
+                raise e
+
+def write_github_summary(title, uploaded_urls: dict, slug, supabase_res, file_size_mb):
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_file and os.path.exists(os.path.dirname(summary_file)):
         with open(summary_file, "a", encoding="utf-8") as f:
             f.write(f"## 🎉 Video Published Successfully!\n\n")
             f.write(f"- **Title:** `{title}`\n")
             f.write(f"- **File Size:** `{file_size_mb} MB`\n")
-            f.write(f"- **Streamtape Player Link:** [{streamtape_url}]({streamtape_url})\n")
+            for host, link in uploaded_urls.items():
+                f.write(f"- **{host} Player Link:** [{link}]({link})\n")
             f.write(f"- **Supabase Status:** {supabase_res}\n\n")
-            f.write(f"### Embed Link\n")
-            f.write(f"`{streamtape_url}`\n")
+            f.write(f"### Embed Links\n")
+            for host, link in uploaded_urls.items():
+                f.write(f"- **{host}:** `{link}`\n")
 
 def write_github_error(err_title, err_detail):
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -212,6 +325,10 @@ def main():
     parser.add_argument("--tags", default="", help="Comma-separated tags (stored in cast_members)")
     parser.add_argument("--desc", default="", help="Video Description")
     parser.add_argument("--publish-to-db", default="", help="Whether to publish to Supabase ('true'/'false')")
+    parser.add_argument("--targets", default="", help="Upload targets: mixdrop,streamtape,lulustream")
+    parser.add_argument("--md-email", default="", help="Mixdrop account email")
+    parser.add_argument("--md-key", default="", help="Mixdrop API key")
+    parser.add_argument("--ls-key", default="", help="LuluStream API key")
     parser.add_argument("--st-login", default="")
     parser.add_argument("--st-key", default="")
     parser.add_argument("--sb-url", default="")
@@ -234,6 +351,15 @@ def main():
 
     raw_pub = (args.publish_to_db or os.environ.get("INPUT_PUBLISH_TO_DB") or "true").strip().lower()
     publish_to_db = raw_pub not in ["false", "0", "no", "off"]
+
+    raw_targets = (args.targets or os.environ.get("INPUT_TARGETS") or "mixdrop,streamtape,lulustream").strip()
+    targets = [t.strip().lower() for t in raw_targets.split(",") if t.strip()]
+    if not targets:
+        targets = ["mixdrop", "streamtape", "lulustream"]
+
+    md_email = (args.md_email or os.environ.get("MIXDROP_EMAIL") or "webbusiness4@zohomail.eu").strip()
+    md_key = (args.md_key or os.environ.get("MIXDROP_KEY") or "VJYb9jle1EJGZLkgl").strip()
+    ls_key = (args.ls_key or os.environ.get("LULUSTREAM_KEY") or "320559sw7k8ezp934rbaz9").strip()
 
     st_login = (args.st_login or os.environ.get("STREAMTAPE_LOGIN") or "1508538fc96ca7edcd0b").strip()
     if not st_login:
@@ -409,20 +535,54 @@ def main():
     file_size_mb = round(os.path.getsize(output_mp4) / (1024 * 1024), 2)
     print(f"✅ Step 2/3: MP4 Ready ({file_size_mb} MB).")
 
-    # 3. Streamtape Upload
-    print(f"🚀 Step 3/3: Uploading to Streamtape (Account: {st_login[:5]}***)...")
-    try:
-        st_url = upload_to_streamtape(output_mp4, target_filename, st_login, st_key)
-        print(f"🎉 Streamtape Player Link: {st_url}")
-    except Exception as ex:
-        err_msg = f"Streamtape upload failed: {str(ex)}"
+    # 3. Dynamic Multi-Host Uploads
+    uploaded_urls = {}
+    upload_errors = []
+
+    if "mixdrop" in targets:
+        print(f"💧 Step 3/3: Uploading to Mixdrop (Account: {md_email})...")
+        try:
+            md_url = upload_to_mixdrop(output_mp4, target_filename, md_email, md_key)
+            uploaded_urls["Mixdrop"] = md_url
+            print(f"🎉 Mixdrop Player Link: {md_url}")
+        except Exception as ex:
+            err = f"Mixdrop upload failed: {str(ex)}"
+            print(f"⚠️ {err}")
+            upload_errors.append(err)
+
+    if "streamtape" in targets:
+        print(f"🚀 Step 3/3: Uploading to Streamtape (Account: {st_login[:5]}***)...")
+        try:
+            st_url = upload_to_streamtape(output_mp4, target_filename, st_login, st_key)
+            uploaded_urls["Streamtape"] = st_url
+            print(f"🎉 Streamtape Player Link: {st_url}")
+        except Exception as ex:
+            err = f"Streamtape upload failed: {str(ex)}"
+            print(f"⚠️ {err}")
+            upload_errors.append(err)
+
+    if "lulustream" in targets and ls_key:
+        print(f"🟣 Step 3/3: Uploading to LuluStream (Key: {ls_key[:6]}***)...")
+        try:
+            ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key)
+            uploaded_urls["LuluStream"] = ls_url
+            print(f"🎉 LuluStream Player Link: {ls_url}")
+        except Exception as ex:
+            err = f"LuluStream upload failed: {str(ex)}"
+            print(f"⚠️ {err}")
+            upload_errors.append(err)
+
+    if not uploaded_urls:
+        err_msg = "All destination uploads failed: " + " | ".join(upload_errors)
         print(f"❌ Error: {err_msg}")
-        write_github_error("Streamtape Upload Error", err_msg)
+        write_github_error("Upload Error", err_msg)
         cleanup_workspace([work_dir, converted_dir])
         sys.exit(1)
 
-    # 4. Supabase Publish
+    # 4. Supabase Publish (Pushes primary embed URL)
     sb_status_msg = "Skipped (Disabled by user)"
+    primary_embed = uploaded_urls.get("Streamtape") or uploaded_urls.get("Mixdrop") or uploaded_urls.get("LuluStream") or list(uploaded_urls.values())[0]
+
     if not publish_to_db:
         print("⚡ Step 4/4: Supabase publishing disabled by user (Skipped).")
     elif sb_url and sb_key:
@@ -431,7 +591,7 @@ def main():
         payload = {
             "title": final_title,
             "slug": slug,
-            "embed_url": st_url,
+            "embed_url": primary_embed,
             "poster_url": custom_poster,
             "backdrop_url": None,
             "description": custom_desc,
@@ -450,12 +610,13 @@ def main():
         sb_status_msg = "Skipped (No credentials)"
         print("⚠️ Supabase credentials missing; skipped database insertion.")
 
-    write_github_summary(final_title, st_url, generate_slug(final_title), sb_status_msg, file_size_mb)
+    write_github_summary(final_title, uploaded_urls, generate_slug(final_title), sb_status_msg, file_size_mb)
     cleanup_workspace([work_dir, converted_dir])
 
     print("=" * 60)
     print("🎉 ALL STEPS COMPLETED SUCCESSFULLY!")
-    print(f"👉 Player Link: {st_url}")
+    for host, link in uploaded_urls.items():
+        print(f"👉 {host} Player Link: {link}")
     print("=" * 60)
 
 if __name__ == "__main__":

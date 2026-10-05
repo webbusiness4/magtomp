@@ -32,6 +32,11 @@ on:
         required: false
         type: boolean
         default: true
+      upload_targets:
+        description: "Upload destinations (comma-separated: mixdrop,streamtape,lulustream)"
+        required: false
+        type: string
+        default: "mixdrop,streamtape,lulustream"
 
 jobs:
   convert_and_upload:
@@ -67,6 +72,10 @@ jobs:
           INPUT_TAGS: ${{ github.event.inputs.tags }}
           INPUT_DESC: ${{ github.event.inputs.description }}
           INPUT_PUBLISH_TO_DB: ${{ github.event.inputs.publish_to_db }}
+          INPUT_TARGETS: ${{ github.event.inputs.upload_targets }}
+          MIXDROP_EMAIL: ${{ secrets.MIXDROP_EMAIL }}
+          MIXDROP_KEY: ${{ secrets.MIXDROP_KEY }}
+          LULUSTREAM_KEY: ${{ secrets.LULUSTREAM_KEY }}
           STREAMTAPE_LOGIN: ${{ secrets.STREAMTAPE_LOGIN }}
           STREAMTAPE_KEY: ${{ secrets.STREAMTAPE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

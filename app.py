@@ -208,7 +208,9 @@ def boost_magnet_link(magnet: str) -> str:
 # Retrieve Default Secrets & Aliases
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
-ls_default_key = os.environ.get("LULUSTREAM_KEY", "")
+md_default_email = os.environ.get("MIXDROP_EMAIL", "webbusiness4@zohomail.eu")
+md_default_key = os.environ.get("MIXDROP_KEY", "VJYb9jle1EJGZLkgl")
+ls_default_key = os.environ.get("LULUSTREAM_KEY", "320559sw7k8ezp934rbaz9")
 vd_default_key = os.environ.get("VIDARA_KEY", "")
 sb_default_url = os.environ.get("SUPABASE_URL", os.environ.get("NEXT_PUBLIC_SUPABASE_URL", ""))
 sb_default_key = os.environ.get("SUPABASE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")))
@@ -219,6 +221,10 @@ try:
         st_default_login = st.secrets["STREAMTAPE_LOGIN"]
     if "STREAMTAPE_KEY" in st.secrets:
         st_default_key = st.secrets["STREAMTAPE_KEY"]
+    if "MIXDROP_EMAIL" in st.secrets:
+        md_default_email = st.secrets["MIXDROP_EMAIL"]
+    if "MIXDROP_KEY" in st.secrets:
+        md_default_key = st.secrets["MIXDROP_KEY"]
     if "LULUSTREAM_KEY" in st.secrets:
         ls_default_key = st.secrets["LULUSTREAM_KEY"]
     if "VIDARA_KEY" in st.secrets:
@@ -255,11 +261,16 @@ with st.sidebar:
         st.success("✅ Supabase Configured")
         
     st.markdown("---")
-    st.subheader("2. Streamtape Account")
+    st.subheader("2. Primary Streaming Hosts")
     st_login = st.text_input("Streamtape API Login", value=st_default_login, type="default")
     st_key = st.text_input("Streamtape API Key", value=st_default_key, type="password")
     if st_login and st_key:
         st.success("✅ Streamtape Connected")
+        
+    md_email = st.text_input("Mixdrop API Email", value=md_default_email, type="default")
+    md_key = st.text_input("Mixdrop API Key", value=md_default_key, type="password")
+    if md_email and md_key:
+        st.success("✅ Mixdrop Connected")
         
     st.markdown("---")
     st.subheader("3. Secondary Hosts (Optional)")
@@ -326,15 +337,23 @@ user_tags = st.text_area(
 
 # Upload Destination Selection
 available_destinations = ["Streamtape"]
+if md_email and md_key:
+    available_destinations.append("Mixdrop")
 if ls_key:
     available_destinations.append("LuluStream")
 if vd_key:
     available_destinations.append("Vidara.so")
 
+default_dest = ["Streamtape"]
+if "Mixdrop" in available_destinations:
+    default_dest.append("Mixdrop")
+if "LuluStream" in available_destinations:
+    default_dest.append("LuluStream")
+
 selected_destinations = st.multiselect(
     "Upload Video To:",
     available_destinations,
-    default=["Streamtape"]
+    default=default_dest
 )
 
 push_to_supabase = st.checkbox("⚡ Automatically insert record into Supabase Database on completion", value=True if sb_url and sb_key else False)
@@ -419,6 +438,62 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
             else:
                 raise Exception(f"Streamtape upload error after {max_retries} attempts: {str(e)}")
 
+def upload_to_mixdrop(file_path: str, custom_filename: str, email: str, key: str, job_dict):
+    """Uploads directly to Mixdrop with live MB tracking."""
+    file_size = os.path.getsize(file_path)
+    file_size_mb = round(file_size / (1024 * 1024), 2)
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            upload_url = "https://ul.mixdrop.ag/api"
+
+            def on_md_progress(monitor):
+                up_bytes = monitor.bytes_read
+                up_mb = round(up_bytes / (1024 * 1024), 2)
+                rem_mb = round(max(0.0, file_size_mb - up_mb), 2)
+                upload_pct = min(100, int((up_bytes / file_size) * 100)) if file_size > 0 else 0
+                job_dict["message"] = f"💧 Uploading to Mixdrop (Attempt {attempt}/{max_retries}): {up_mb} MB / {file_size_mb} MB • Remaining: {rem_mb} MB ({upload_pct}%)"
+
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(max_retries=3, pool_connections=1, pool_maxsize=1)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+            with open(file_path, "rb") as f:
+                encoder = MultipartEncoder(fields={
+                    "email": email,
+                    "key": key,
+                    "file": (custom_filename, f, "video/mp4")
+                })
+                monitor = MultipartEncoderMonitor(encoder, on_md_progress)
+                headers = {
+                    "Content-Type": monitor.content_type,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Connection": "keep-alive"
+                }
+                upload_res = session.post(upload_url, data=monitor, headers=headers, timeout=3600).json()
+
+            if upload_res.get("success") is True and upload_res.get("result"):
+                res_data = upload_res["result"]
+                embed_url = res_data.get("embedurl", "")
+                if embed_url.startswith("//"):
+                    embed_url = f"https:{embed_url}"
+                elif not embed_url and res_data.get("fileref"):
+                    embed_url = f"https://mixdrop.co/e/{res_data['fileref']}"
+                elif not embed_url and res_data.get("url"):
+                    embed_url = res_data.get("url")
+                return embed_url
+            else:
+                err_msg = upload_res.get("error") or upload_res.get("result") or upload_res
+                raise Exception(f"Mixdrop API rejected upload: {err_msg}")
+
+        except Exception as e:
+            if attempt < max_retries:
+                time.sleep(attempt * 4)
+            else:
+                raise Exception(f"Mixdrop upload error after {max_retries} attempts: {str(e)}")
+
 def upload_to_lulustream(file_path: str, custom_filename: str, api_key: str, job_dict):
     """Uploads directly to LuluStream with live MB tracking."""
     srv_req = f"https://lulustream.com/api/upload/server?key={api_key}"
@@ -494,7 +569,7 @@ def upload_to_vidara(file_path: str, custom_filename: str, api_key: str, job_dic
         err_msg = upload_res.get("error") or upload_res.get("msg") or upload_res
         raise Exception(f"Vidara error: {err_msg}")
 
-def background_worker_task(job_id: str, input_url: str, targets: list, st_creds: tuple, ls_key: str, vd_key: str, supabase_config: dict):
+def background_worker_task(job_id: str, input_url: str, targets: list, st_creds: tuple, md_creds: tuple, ls_key: str, vd_key: str, supabase_config: dict):
     """Executes the complete pipeline in a detached background thread."""
     work_dir = f"./cloud_downloads_{job_id}"
     converted_dir = f"./converted_{job_id}"
@@ -743,10 +818,20 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         except Exception as e:
             upload_errors.append(f"Streamtape: {str(e)}")
 
+    # Mixdrop
+    if "Mixdrop" in targets and md_creds[0] and md_creds[1]:
+        try:
+            job["progress"] = 80
+            job["message"] = f"💧 Step 3/3: Uploading to Mixdrop ({file_size_mb} MB)..."
+            md_url = upload_to_mixdrop(output_mp4, target_filename, md_creds[0], md_creds[1], job)
+            job["mixdrop_url"] = md_url
+        except Exception as e:
+            upload_errors.append(f"Mixdrop: {str(e)}")
+
     # LuluStream
     if "LuluStream" in targets and ls_key:
         try:
-            job["progress"] = 82
+            job["progress"] = 85
             job["message"] = f"🟣 Step 3/3: Uploading to LuluStream ({file_size_mb} MB)..."
             ls_url = upload_to_lulustream(output_mp4, target_filename, ls_key, job)
             job["lulustream_url"] = ls_url
@@ -764,7 +849,8 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
             upload_errors.append(f"Vidara.so: {str(e)}")
 
     # 4. Insert into Supabase ('streams' Table: backdrop_url kept empty)
-    if supabase_config.get("enabled") and job.get("streamtape_url"):
+    primary_embed_url = job.get("streamtape_url") or job.get("mixdrop_url") or job.get("lulustream_url") or job.get("vidara_url")
+    if supabase_config.get("enabled") and primary_embed_url:
         job["message"] = "⚡ Step 4/4: Inserting video record into Supabase 'streams' table..."
         
         meta = job.get("user_meta", {})
@@ -775,7 +861,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
         payload = {
             "title": final_post_title,
             "slug": slug,
-            "embed_url": job["streamtape_url"], # https://streamtape.com/e/XXXXX/
+            "embed_url": primary_embed_url,
             "poster_url": meta.get("image") or "",
             "backdrop_url": None, # Kept strictly empty
             "description": meta.get("description") or "",
@@ -797,7 +883,7 @@ def background_worker_task(job_id: str, input_url: str, targets: list, st_creds:
 
     job["progress"] = 100
     
-    if job.get("streamtape_url") or job.get("lulustream_url") or job.get("vidara_url"):
+    if job.get("streamtape_url") or job.get("mixdrop_url") or job.get("lulustream_url") or job.get("vidara_url"):
         job["status"] = "completed"
         if upload_errors:
             job["error"] = " | ".join(upload_errors)
@@ -831,6 +917,8 @@ if convert_clicked:
     else:
         if "Streamtape" in selected_destinations and (not st_login or not st_key):
             st.error("⚠️ Please enter Streamtape Login and Key in the sidebar.")
+        elif "Mixdrop" in selected_destinations and (not md_email or not md_key):
+            st.error("⚠️ Please enter Mixdrop Email and Key in the sidebar.")
         else:
             job_id = hashlib.md5(clean_input.encode()).hexdigest()[:10]
             st.session_state.current_job_id = job_id
@@ -859,6 +947,7 @@ if convert_clicked:
                     "filename": "",
                     "size_mb": 0,
                     "streamtape_url": "",
+                    "mixdrop_url": "",
                     "lulustream_url": "",
                     "vidara_url": "",
                     "supabase_status": "",
@@ -872,6 +961,7 @@ if convert_clicked:
                         clean_input,
                         selected_destinations,
                         (st_login.strip(), st_key.strip()),
+                        (md_email.strip(), md_key.strip()),
                         ls_key.strip() if ls_key else "",
                         vd_key.strip() if vd_key else "",
                         sb_config
@@ -917,6 +1007,12 @@ if "current_job_id" in st.session_state and st.session_state.current_job_id:
                 st.markdown("#### 🚀 Streamtape Player Link (`embed_url`):")
                 st.code(job["streamtape_url"], language="text")
                 st.markdown(f"👉 [**▶️ Open Streamtape Player**]({job['streamtape_url']})")
+
+            # Mixdrop Card
+            if job.get("mixdrop_url"):
+                st.markdown("#### 💧 Mixdrop Player Link:")
+                st.code(job["mixdrop_url"], language="text")
+                st.markdown(f"👉 [**▶️ Open Mixdrop Player**]({job['mixdrop_url']})")
                 
             # LuluStream Card
             if job.get("lulustream_url"):

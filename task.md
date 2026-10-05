@@ -17,3 +17,20 @@
   - [x] Create `README.md` with step-by-step GitHub & Streamlit Cloud deployment steps.
   - [x] Create `.gitignore` to prevent media artifact leakage.
   - [x] Verify script syntax and integrity.
+
+- [x] **Phase 4: Mixdrop Integration & Dynamic Destination Selection**
+  - [x] Configure Mixdrop credentials (`MIXDROP_EMAIL`, `MIXDROP_KEY`) in environment, secrets, and UI sidebar.
+  - [x] Implement `upload_to_mixdrop()` multipart uploader with live chunked byte monitoring via `MultipartEncoderMonitor`.
+  - [x] Add `"Mixdrop"` to `available_destinations` multiselect with selectable destination routing in both `index.html` and `app.py`.
+  - [x] Implement multi-destination embed resolution (primary embed fallback for Supabase publishing when Streamtape is unselected).
+  - [x] Add Mixdrop embed/player card to UI completion view and GitHub summary.
+  - [x] Update `worker.py` headless CLI and `.github/workflows/process_video.yml` for Mixdrop upload support.
+
+- [x] **Phase 5: LuluStream Integration across Web Dispatcher & GitHub Actions**
+  - [x] Add 🟣 **LuluStream** destination checkbox to `index.html` with persistent `localStorage` support.
+  - [x] Pass `LULUSTREAM_KEY` through `.github/workflows/process_video.yml`.
+  - [x] Implement `upload_to_lulustream()` in `worker.py` with server discovery, chunked streaming, and fallback embed resolution.
+  - [x] Preconfigure default LuluStream API key (`320559sw7k8ezp934rbaz9`) across `app.py` and `worker.py`.
+  - [x] Include LuluStream player links in GitHub Actions step summary.
+
+
