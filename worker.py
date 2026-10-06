@@ -185,6 +185,27 @@ def upload_to_streamtape(file_path: str, custom_filename: str, login: str, key: 
                 raise e
 
 def upload_to_mixdrop(file_path: str, custom_filename: str, email: str, key: str, max_retries: int = 3):
+    # Sanitize known OCR key confusion
+    if key == "VJYb9jle1EJGZLkgl":
+        key = "VJYb9jIe1EJGZLkgl"
+
+    # Pre-flight check: verify credentials & rate limit before uploading large file
+    try:
+        pre_url = f"https://api.mixdrop.ag/fileinfo2?email={email}&key={key}&ref[]=preflight"
+        pre_res = requests.get(pre_url, timeout=10).json()
+        if pre_res.get("success") is not True:
+            msg = pre_res.get("result", {}).get("msg", str(pre_res))
+            if "too many failed login" in msg.lower():
+                raise Exception(f"Mixdrop rate-limit cooldown active: '{msg}'. Please wait for timer to expire.")
+            elif "invalid login" in msg.lower():
+                raise Exception(f"Mixdrop credentials rejected: '{msg}'.")
+            else:
+                print(f"⚠️ Mixdrop preflight notice: {msg}. Continuing upload...")
+    except Exception as e:
+        if "Mixdrop rate-limit cooldown" in str(e) or "Mixdrop credentials rejected" in str(e):
+            raise e
+        print(f"ℹ️ Mixdrop preflight network check skipped ({e}). Proceeding directly with upload...")
+
     file_size = os.path.getsize(file_path)
     file_size_mb = round(file_size / (1024 * 1024), 2)
 
@@ -234,9 +255,14 @@ def upload_to_mixdrop(file_path: str, custom_filename: str, email: str, key: str
                 return embed_url
             else:
                 err_msg = upload_res.get("error") or upload_res.get("result") or upload_res
+                err_str = str(err_msg)
+                if "too many failed login" in err_str.lower() or "invalid login" in err_str.lower():
+                    raise Exception(f"Mixdrop authentication error (non-retryable): {err_msg}")
                 raise Exception(f"Mixdrop API rejected upload: {err_msg}")
 
         except Exception as e:
+            if "non-retryable" in str(e) or "cooldown active" in str(e) or "credentials rejected" in str(e):
+                raise e
             print(f"⚠️ Mixdrop attempt {attempt} encountered error: {str(e)}")
             if attempt < max_retries:
                 wait_s = attempt * 5
@@ -359,6 +385,8 @@ def main():
 
     md_email = (args.md_email or os.environ.get("MIXDROP_EMAIL") or "webbusiness4@zohomail.eu").strip()
     md_key = (args.md_key or os.environ.get("MIXDROP_KEY") or "VJYb9jIe1EJGZLkgl").strip()
+    if md_key == "VJYb9jle1EJGZLkgl":
+        md_key = "VJYb9jIe1EJGZLkgl"
     ls_key = (args.ls_key or os.environ.get("LULUSTREAM_KEY") or "320559sw7k8ezp934rbaz9").strip()
 
     st_login = (args.st_login or os.environ.get("STREAMTAPE_LOGIN") or "1508538fc96ca7edcd0b").strip()
