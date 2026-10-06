@@ -33,4 +33,10 @@
   - [x] Preconfigure default LuluStream API key (`320559sw7k8ezp934rbaz9`) across `app.py` and `worker.py`.
   - [x] Include LuluStream player links in GitHub Actions step summary.
 
+- [x] **Phase 6: Mixdrop Key Verification & Authentication Resolution**
+  - [x] Identify character case ambiguity in visually transcribed key (`l` vs `I` at position 7).
+  - [x] Test and verify corrected key (`VJYb9jIe1EJGZLkgl`) against live Mixdrop API (`https://api.mixdrop.ag/fileinfo2`).
+  - [x] Update fallback defaults in `app.py` and `worker.py`.
+  - [x] Clean temporary debugging artifacts.
+
 

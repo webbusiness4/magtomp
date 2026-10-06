@@ -358,7 +358,7 @@ def main():
         targets = ["mixdrop", "streamtape", "lulustream"]
 
     md_email = (args.md_email or os.environ.get("MIXDROP_EMAIL") or "webbusiness4@zohomail.eu").strip()
-    md_key = (args.md_key or os.environ.get("MIXDROP_KEY") or "VJYb9jle1EJGZLkgl").strip()
+    md_key = (args.md_key or os.environ.get("MIXDROP_KEY") or "VJYb9jIe1EJGZLkgl").strip()
     ls_key = (args.ls_key or os.environ.get("LULUSTREAM_KEY") or "320559sw7k8ezp934rbaz9").strip()
 
     st_login = (args.st_login or os.environ.get("STREAMTAPE_LOGIN") or "1508538fc96ca7edcd0b").strip()

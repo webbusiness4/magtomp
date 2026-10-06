@@ -209,7 +209,7 @@ def boost_magnet_link(magnet: str) -> str:
 st_default_login = os.environ.get("STREAMTAPE_LOGIN", "1508538fc96ca7edcd0b")
 st_default_key = os.environ.get("STREAMTAPE_KEY", "9OpkRzZj6OuawrD")
 md_default_email = os.environ.get("MIXDROP_EMAIL", "webbusiness4@zohomail.eu")
-md_default_key = os.environ.get("MIXDROP_KEY", "VJYb9jle1EJGZLkgl")
+md_default_key = os.environ.get("MIXDROP_KEY", "VJYb9jIe1EJGZLkgl")
 ls_default_key = os.environ.get("LULUSTREAM_KEY", "320559sw7k8ezp934rbaz9")
 vd_default_key = os.environ.get("VIDARA_KEY", "")
 sb_default_url = os.environ.get("SUPABASE_URL", os.environ.get("NEXT_PUBLIC_SUPABASE_URL", ""))
